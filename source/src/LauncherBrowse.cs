@@ -382,7 +382,7 @@ namespace FoxholeModLauncher
             if (browseSearch == null) return;
             browseSearch.SetBounds((int)((CX + 36) * uiScale), (int)(19 * uiScale), (int)(192 * uiScale), (int)(24 * uiScale));
             var old = browseSearch.Font;
-            browseSearch.Font = new Font("Segoe UI", 11f * uiScale);
+            browseSearch.Font = new Font("Segoe UI", 14.667f * uiScale, GraphicsUnit.Pixel);   // (11 pt at 96 DPI, in pixels: the window is DPI aware)
             if (old != null && old != Control.DefaultFont) old.Dispose();
         }
         void DrawBrowsePage(Graphics g)

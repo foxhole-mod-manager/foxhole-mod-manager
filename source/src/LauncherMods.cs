@@ -174,11 +174,7 @@ namespace FoxholeModLauncher
             string hash = Sha256(file);
             foreach (var old in CosMods())
                 if (Str(old, "sha256") == hash) throw new Exception("this mod is already added (" + Str(old, "name") + ")");
-            string id = Regex.Replace(name.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
-            if (id.Length > 40) id = id.Substring(0, 40).Trim('-');
-            if (id == "") id = "mod";
-            id += "-" + hash.Substring(0, 6);
-            if (File.Exists(Path.Combine(CosDir, id, "mod.json"))) id = id.Substring(0, id.Length - 6) + hash.Substring(0, 16);   // (another file whose hash starts the same: never its folder)
+            string id = NewModId(name, hash);
             string root = Path.Combine(CosDir, id), files = Path.Combine(root, "files");
             string tmp = Path.Combine(CosDir, "_unpack-" + Guid.NewGuid().ToString("N").Substring(0, 12));
             DeleteTree(root);
@@ -224,6 +220,17 @@ namespace FoxholeModLauncher
                 return id;
             }
             catch { try { DeleteTree(root); DeleteTree(tmp); } catch { } throw; }
+        }
+
+        // a new mod's id: its name in lower case + the start of its file's hash (also LauncherFound.cs - a mod taken over from the game)
+        static string NewModId(string name, string hash)
+        {
+            string id = Regex.Replace(name.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
+            if (id.Length > 40) id = id.Substring(0, 40).Trim('-');
+            if (id == "") id = "mod";
+            id += "-" + hash.Substring(0, 6);
+            if (File.Exists(Path.Combine(CosDir, id, "mod.json"))) id = id.Substring(0, id.Length - 6) + hash.Substring(0, 16);   // (another file whose hash starts the same: never its folder)
+            return id;
         }
 
         const long ARCHIVE_MAX = 4L << 30;          // the archive file
@@ -350,9 +357,9 @@ namespace FoxholeModLauncher
             if (on)
             {
                 // (refused before anything is copied: a same-named file the launcher did not put there, or a settings file another ON mod owns)
-                foreach (var rel in StrList(m, "paks"))
+                foreach (var rel in PakFiles(m))
                 {
-                    string t = Path.Combine(paksDir, Path.GetFileName(rel));
+                    string t = PakTarget(paksDir, m, rel);
                     if (string.Equals(Path.GetFileName(rel), OUR_MOD_PAK, StringComparison.OrdinalIgnoreCase) || Path.GetFileName(rel).Equals("War-WindowsNoEditor.pak", StringComparison.OrdinalIgnoreCase))
                         throw new Exception("its pak has the name of a game / server pak (" + Path.GetFileName(rel) + ") - not installed");
                     if (File.Exists(t) && !inst.ContainsKey(t.ToLowerInvariant())) throw new Exception("a file called " + Path.GetFileName(rel) + " is already in the game's Paks folder (not added by the launcher)");
@@ -366,10 +373,11 @@ namespace FoxholeModLauncher
                 var wrote = new List<string>(); var fresh = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 try
                 {
-                    foreach (var rel in StrList(m, "paks"))
+                    foreach (var rel in PakFiles(m))
                     {
-                        string t = Path.Combine(paksDir, Path.GetFileName(rel));
+                        string t = PakTarget(paksDir, m, rel);
                         wrote.Add(t); if (!File.Exists(t)) fresh.Add(t);
+                        Directory.CreateDirectory(Path.GetDirectoryName(t));
                         CopyPlain(Path.Combine(files, rel), t);
                         inst[t.ToLowerInvariant()] = Sha256(t); done.Add(Path.GetFileName(rel));
                     }
@@ -411,13 +419,27 @@ namespace FoxholeModLauncher
             {
                 try
                 {
+                    // (review of 1.1.2, 5) a pak that changed since the launcher put it there is kept - and so are its companions (.sig /
+                    // .utoc / .ucas of the same name): the game needs them together
+                    var keptStems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var kept = new List<string>();
                     foreach (var rel in StrList(m, "paks"))
                     {
-                        string t = Path.Combine(paksDir, Path.GetFileName(rel)), k = t.ToLowerInvariant();
+                        string t = PakTarget(paksDir, m, rel), k = t.ToLowerInvariant();
                         if (File.Exists(t) && inst.ContainsKey(k) && Sha256(t) == Str(inst, k)) DeletePlain(t);
-                        else if (File.Exists(t)) Say("kept " + t + " - it changed since the launcher put it there");
+                        else if (File.Exists(t)) { keptStems.Add(Path.GetFileNameWithoutExtension(rel)); kept.Add(Path.GetFileName(rel)); Say("kept " + t + " - it changed since the launcher put it there"); }
                         inst.Remove(k); done.Add(Path.GetFileName(rel));
                     }
+                    foreach (var rel in StrList(m, "companions"))
+                    {
+                        string t = PakTarget(paksDir, m, rel), k = t.ToLowerInvariant();
+                        if (File.Exists(t) && keptStems.Contains(Path.GetFileNameWithoutExtension(rel))) { kept.Add(Path.GetFileName(rel)); Say("kept " + t + " - its pak was kept"); }
+                        else if (File.Exists(t) && inst.ContainsKey(k) && Sha256(t) == Str(inst, k)) DeletePlain(t);
+                        else if (File.Exists(t)) { kept.Add(Path.GetFileName(rel)); Say("kept " + t + " - it changed since the launcher put it there"); }
+                        inst.Remove(k); done.Add(Path.GetFileName(rel));
+                    }
+                    if (kept.Count > 0)
+                        cosNote = "Left in the game (changed since the app put it there): " + string.Join(", ", kept.ToArray()) + " - delete it from the Paks folder yourself if you no longer want it.";
                     foreach (var rel in StrList(m, "configs"))
                     {
                         string t = Path.Combine(cfgDir, Path.GetFileName(rel)), k = t.ToLowerInvariant(), bk = Path.Combine(CosDir, id, "backup", Path.GetFileName(rel));
@@ -442,6 +464,8 @@ namespace FoxholeModLauncher
             Say("cosmetic mod " + Str(m, "name") + (on ? " ON: " : " OFF: ") + string.Join(", ", done.ToArray()));
         }
 
+        static List<string> PakFiles(Dictionary<string, object> m) { var r = StrList(m, "paks"); r.AddRange(StrList(m, "companions")); return r; }
+
         void CosRemove(string id) { lock (cosLock) CosRemoveLocked(id); }
         void CosRemoveLocked(string id)
         {
@@ -458,6 +482,7 @@ namespace FoxholeModLauncher
             if (n < 0) { string s = Encoding.Unicode.GetString(b, q, -2 * n); q += -2 * n; return s.TrimEnd('\0'); }
             string a = Encoding.GetEncoding(28591).GetString(b, q, n); q += n; return a.TrimEnd('\0');
         }
+        const long PAK_INDEX_MAX = 64L << 20;
         // (mount point, entry paths, version); throws when it is not a readable pak (or an encrypted one)
         internal static List<string> PakPaths(string path, out string mount, out int version)   // (also LauncherSandbox.cs)
         {
@@ -472,12 +497,15 @@ namespace FoxholeModLauncher
                 version = BitConverter.ToInt32(tail, m + 4);
                 long ioff = BitConverter.ToInt64(tail, m + 8), isize = BitConverter.ToInt64(tail, m + 16);
                 if (m >= 1 && tail[m - 1] != 0) throw new Exception("its index is encrypted");
-                if (ioff < 0 || isize <= 0 || ioff + isize > n || isize > 1L << 30) throw new Exception("its index is damaged");
+                if (ioff < 0 || isize <= 0 || ioff + isize > n) throw new Exception("its index is damaged");
+                // (review of 1.1.2, 8) a crafted pak must not make the app allocate gigabytes: the game's own 25 GB pak has a ~3 MB index
+                if (isize > PAK_INDEX_MAX) throw new Exception("its index is too large (" + (isize >> 20) + " MB) - not a cosmetic mod");
                 var ix = new byte[isize]; f.Seek(ioff, SeekOrigin.Begin);
                 int got = 0; while (got < isize) { int r = f.Read(ix, got, (int)isize - got); if (r <= 0) break; got += r; }
                 int q = 0;
                 mount = FStr(ix, ref q);
                 int count = BitConverter.ToInt32(ix, q); q += 4;
+                if (count < 0 || count > isize / 53) throw new Exception("its index is damaged");   // (an entry takes 53 bytes at least)
                 var paths = new List<string>(count);
                 for (int k = 0; k < count; k++)
                 {
@@ -552,47 +580,79 @@ namespace FoxholeModLauncher
             {
                 string id = Str(m, "id");
                 var notes = new List<string>();
-                string verdict = "OK";
-                if (readErr.ContainsKey(id)) { verdict = "WILL NOT LOAD"; notes.Add("not a readable pak - " + readErr[id]); }
-                var set = filesOf[id];
-                if (baseSet != null && set.Count > 0)
-                {
-                    int replaced = 0, unofficial = 0, unknown = 0; string firstUnofficial = "", firstUnknown = "";
-                    foreach (var r in set)
-                    {
-                        if (baseSet.Contains(r))
-                        {
-                            replaced++;
-                            if (!Array.Exists(OfficialFolders, f => r.StartsWith(f, StringComparison.OrdinalIgnoreCase))) { unofficial++; if (firstUnofficial == "") firstUnofficial = r; }
-                        }
-                        else if (r.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase) || r.EndsWith(".umap", StringComparison.OrdinalIgnoreCase)) { unknown++; if (firstUnknown == "") firstUnknown = r; }
-                    }
-                    notes.Add("replaces " + replaced + " game file(s)");
-                    if (unofficial > 0)
-                    {
-                        if (verdict == "OK") verdict = VERDICT_EDITION;   // (official play ignores those files; the private servers lift that filter)
-                        notes.Add(unofficial + " of them outside the folders official Foxhole accepts from mods (e.g. " + firstUnofficial + ") - official Foxhole ignores those");
-                    }
-                    if (unknown > 0)
-                    {
-                        if (verdict == "OK") verdict = "WARNING";
-                        notes.Add(unknown + " file(s) this game version does not have (e.g. " + firstUnknown + ") - made for another version?");
-                    }
-                }
-                int clash = 0; foreach (var r in set) if (ours.Contains(r)) clash++;
-                if (clash > 0) { if (verdict == "OK") verdict = "WARNING"; notes.Add(clash + " file(s) the server's own mods also change - one of the two wins"); }
+                var onOthers = new List<KeyValuePair<string, HashSet<string>>>();
                 if (Yes(m, "enabled"))
                     foreach (var o in mods)
-                    {
-                        if (Str(o, "id") == id || !Yes(o, "enabled")) continue;
-                        int same = 0; foreach (var r in set) if (filesOf[Str(o, "id")].Contains(r)) same++;
-                        if (same > 0) { if (verdict == "OK") verdict = "WARNING"; notes.Add("conflict: " + same + " file(s) also changed by " + Str(o, "name") + " - only one of them shows"); }
-                    }
+                        if (Str(o, "id") != id && Yes(o, "enabled")) onOthers.Add(new KeyValuePair<string, HashSet<string>>(Str(o, "name"), filesOf[Str(o, "id")]));
+                string err; readErr.TryGetValue(id, out err);
+                string verdict = PakVerdict(filesOf[id], err, baseSet, ours, onOthers, PakFolderOf(m), notes);
                 foreach (var c in StrList(m, "configs")) notes.Add("settings: replaces your " + Path.GetFileName(c) + " while ON (yours is kept and put back on OFF)");
                 if (StrList(m, "ignored").Count > 0) notes.Add("left out (not game files): " + string.Join(", ", StrList(m, "ignored").ToArray()));
                 m["verdict"] = verdict; m["notes"] = notes;
                 SaveMod(m);
             }
+        }
+
+        // one mod's verdict from the files its paks hold (War/Content-relative): unreadable = WILL NOT LOAD; outside the folders official
+        // Foxhole accepts = VERDICT_EDITION; files the game does not have / our server pak also changes / another switched-on mod also changes =
+        // WARNING. (2026-11-19) shared by the store's check and the mods FOUND in the game (LauncherFound.cs); folder = the Paks sub-folder
+        // the pak sits in ("" = Paks itself) - LogicMods is UE4SS's blueprint-mod folder (the plain game never loads it)
+        string PakVerdict(HashSet<string> set, string readErr, HashSet<string> baseSet, HashSet<string> ours,
+                          List<KeyValuePair<string, HashSet<string>>> onOthers, string folder, List<string> notes)
+        {
+            string verdict = "OK";
+            if (!string.IsNullOrEmpty(readErr)) { verdict = "WILL NOT LOAD"; notes.Add("not a readable pak - " + readErr); }
+            if (folder.Split('/')[0].Equals("LogicMods", StringComparison.OrdinalIgnoreCase))
+            {
+                if (verdict == "OK") verdict = "NEEDS A MOD LOADER";
+                notes.Add("in the LogicMods folder - a blueprint mod that only a mod loader (UE4SS) runs; the plain game does not load it");
+            }
+            if (baseSet != null && set.Count > 0)
+            {
+                int replaced = 0, unofficial = 0, unknown = 0; string firstUnofficial = "", firstUnknown = "";
+                foreach (var r in set)
+                {
+                    if (baseSet.Contains(r))
+                    {
+                        replaced++;
+                        if (!Array.Exists(OfficialFolders, f => r.StartsWith(f, StringComparison.OrdinalIgnoreCase))) { unofficial++; if (firstUnofficial == "") firstUnofficial = r; }
+                    }
+                    else if (r.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase) || r.EndsWith(".umap", StringComparison.OrdinalIgnoreCase)) { unknown++; if (firstUnknown == "") firstUnknown = r; }
+                }
+                notes.Add("replaces " + replaced + " game file(s)");
+                if (unofficial > 0)
+                {
+                    if (verdict == "OK") verdict = VERDICT_EDITION;   // (official play ignores those files; the private servers lift that filter)
+                    notes.Add(unofficial + " of them outside the folders official Foxhole accepts from mods (e.g. " + firstUnofficial + ") - official Foxhole ignores those");
+                }
+                if (unknown > 0)
+                {
+                    if (verdict == "OK") verdict = "WARNING";
+                    notes.Add(unknown + " file(s) this game version does not have (e.g. " + firstUnknown + ") - made for another version?");
+                }
+            }
+            int clash = 0; foreach (var r in set) if (ours.Contains(r)) clash++;
+            if (clash > 0) { if (verdict == "OK") verdict = "WARNING"; notes.Add(clash + " file(s) the server's own mods also change - one of the two wins"); }
+            foreach (var o in onOthers)
+            {
+                int same = 0; foreach (var r in set) if (o.Value.Contains(r)) same++;
+                if (same > 0) { if (verdict == "OK") verdict = "WARNING"; notes.Add("conflict: " + same + " file(s) also changed by " + o.Key + " - only one of them shows"); }
+            }
+            return verdict;
+        }
+        static string PakFolderOf(Dictionary<string, object> m) { return Str(m, "paks_dir").Replace('\\', '/').Trim('/'); }
+        static string PakTarget(string paksDir, Dictionary<string, object> m, string rel)
+        {
+            string sub = PakFolderOf(m);
+            return PaksFile(paksDir, (sub == "" ? "" : sub + "/") + Path.GetFileName(rel));
+        }
+        // (review of 1.1.2, 3) THE one form of a game-side file's path - also its installed.json key (lower case): Path.Combine(Paks, rel) as
+        // the launcher always wrote it (ModsPaks() is not normalised - existing keys stay valid), checked to stay inside Paks (InsideOrThrow).
+        // A normalised form (Path.GetFullPath) differs from it for a game_dir with "/" or "..", so OFF / ON / take-over would miss the record.
+        static string PaksFile(string paksDir, string rel)
+        {
+            InsideOrThrow(paksDir, rel);
+            return Path.Combine(paksDir, SafeRel(rel).Replace('/', '\\'));
         }
 
         // ---------------------------------------------------------------------------------------------------- Nexus Mods (browser route)
@@ -690,11 +750,12 @@ namespace FoxholeModLauncher
         }
 
         // ---------------------------------------------------------------------------------------------------- UI
+        volatile string cosNote = "";                                    // (a note an operation leaves for the page - e.g. files kept on OFF / Remove)
         void ModsRun(Action a)
         {
             new Thread(() =>
             {
-                try { a(); modsLine = ""; }
+                try { cosNote = ""; a(); modsLine = cosNote; }
                 catch (Exception ex) { modsLine = ex.Message; Say("cosmetic mods: " + ex.Message); if (browseOpen) browseNote = ex.Message; }
                 Ui(() => { CountInstalled(); if (browseOpen) BrowseRefreshInstalled(); Redraw(); });
             }) { IsBackground = true }.Start();
@@ -702,6 +763,7 @@ namespace FoxholeModLauncher
 
         void ModsClick(string h)
         {
+            if (FoundClick(h)) return;                                    // (the mods found in the game - LauncherFound.cs)
             if (h == "add")
             {
                 using (var d = new OpenFileDialog { Title = "Add a cosmetic mod", Filter = MOD_FILTER,
@@ -750,7 +812,8 @@ namespace FoxholeModLauncher
         static bool ModsCommandLine(string[] args)
         {
             var a = new List<string>(args);
-            string[] cmds = { "--mods-list", "--mods-add", "--mods-on", "--mods-off", "--mods-remove", "--mods-check", "--mods-update", "--mods-rollback" };
+            string[] cmds = { "--mods-list", "--mods-add", "--mods-on", "--mods-off", "--mods-remove", "--mods-check", "--mods-update", "--mods-rollback",
+                               "--mods-found", "--mods-takeover" };
             if (!a.Exists(x => Array.IndexOf(cmds, x) >= 0)) return false;
             AttachConsole(-1);
             Headless = true;
@@ -766,7 +829,9 @@ namespace FoxholeModLauncher
                 if (a.Contains("--mods-remove")) l.CosRemove(opt("--mods-remove"));
                 if (a.Contains("--mods-update")) { int i = a.IndexOf("--mods-update"); if (i + 2 >= a.Count) throw new Exception("--mods-update <id> <file>"); l.CosUpdate(a[i + 1], a[i + 2], a.Contains("--yes")); }
                 if (a.Contains("--mods-rollback")) l.CosRollback(opt("--mods-rollback"));
+                if (a.Contains("--mods-takeover")) Console.WriteLine("taken over " + l.CosTakeOver(opt("--mods-takeover")));   // (LauncherFound.cs)
                 if (a.Contains("--mods-check")) l.CosCheckAll();
+                if (a.Contains("--mods-found")) l.FoundPrint();
                 if (a.Contains("--mods-list") || a.Contains("--mods-check"))
                     foreach (var m in CosMods())
                     {

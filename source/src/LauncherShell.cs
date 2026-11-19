@@ -22,8 +22,8 @@ namespace FoxholeModLauncher
         const int CX = SIDE + 24, CR = W - 24, CY = HDR + 20, CB = H - STB - 16;      // (the page's inner box)
         static readonly Color CBg = Color.FromArgb(14, 15, 17), CSide = Color.FromArgb(19, 20, 23), CSurf = Color.FromArgb(23, 24, 27),
             CSurf2 = Color.FromArgb(29, 31, 35), CLine = Color.FromArgb(38, 40, 45), CLine2 = Color.FromArgb(52, 54, 60),
-            CText = Color.FromArgb(236, 234, 228), CText2 = Color.FromArgb(201, 198, 190), CMuted = Color.FromArgb(163, 160, 151),
-            CFaint = Color.FromArgb(140, 138, 131), CAccent = Color.FromArgb(212, 184, 114), CAccentHi = Color.FromArgb(226, 202, 140),
+            CText = Color.FromArgb(236, 234, 228), CText2 = Color.FromArgb(212, 209, 202), CMuted = Color.FromArgb(180, 177, 169),
+            CFaint = Color.FromArgb(158, 156, 149), CAccent = Color.FromArgb(212, 184, 114), CAccentHi = Color.FromArgb(226, 202, 140),
             CAccentInk = Color.FromArgb(26, 22, 8), CGood = Color.FromArgb(143, 191, 106), CWarn = Color.FromArgb(224, 180, 90),
             CBad = Color.FromArgb(226, 123, 102), CSwitchOn = Color.FromArgb(111, 160, 75), CSwitchOff = Color.FromArgb(58, 60, 66),
             CNavOn = Color.FromArgb(35, 37, 31);
@@ -60,13 +60,20 @@ namespace FoxholeModLauncher
         void FitToScreen()
         {
             Rectangle wa;
-            try { wa = Screen.FromPoint(Cursor.Position).WorkingArea; } catch { wa = new Rectangle(0, 0, W, H); }
-            float s = Math.Min(1f, Math.Min((wa.Width - 24) / (float)W, (wa.Height - 24) / (float)H));
+            // (review of 1.1.2, 7) the window's own screen once it exists; before that the screen it opens on (CenterScreen: the cursor's)
+            try { wa = IsHandleCreated ? Screen.FromHandle(Handle).WorkingArea : Screen.FromPoint(Cursor.Position).WorkingArea; } catch { wa = new Rectangle(0, 0, W, H); }
+            FitToScreen(wa);
+        }
+        void FitToScreen(Rectangle wa)
+        {
+            // (2026-11-19) the screen's scale (the window is DPI aware - LauncherWindow.cs), shrunk where the screen is too small
+            float s = Math.Min(dpiScale, Math.Min((wa.Width - 24) / (float)W, (wa.Height - 24) / (float)H));
             uiScale = Math.Max(0.6f, s);
             ClientSize = new Size((int)Math.Round(W * uiScale), (int)Math.Round(H * uiScale));
             PlaceSearchBox();
         }
         Point ToFrame(Point p) { return uiScale == 1f ? p : new Point((int)(p.X / uiScale), (int)(p.Y / uiScale)); }
+        Size FrameSize() { return new Size((int)Math.Round(W * uiScale), (int)Math.Round(H * uiScale)); }   // (the frame = the window's pixels)
 
         // ---------------------------------------------------------------------------------------------------- primitives
         static GraphicsPath Round(Rectangle r, int rad)
@@ -165,10 +172,11 @@ namespace FoxholeModLauncher
                 try
                 {
                     txtHead = head;
-                    IntPtr old = SelectObject(hdc, FontOf(px, bold));
+                    float k = drawScale;                                         // (measured with the font the frame draws, in frame units)
+                    IntPtr old = SelectObject(hdc, FontOf(Math.Max(1, (int)Math.Round(px * k)), bold));
                     SIZE sz; GetTextExtentPoint32W(hdc, s, s.Length, out sz);
                     SelectObject(hdc, old);
-                    return sz.cx;
+                    return (int)Math.Ceiling(sz.cx / k);
                 }
                 finally { txtHead = false; g.ReleaseHdc(hdc); }
             }
@@ -251,9 +259,10 @@ namespace FoxholeModLauncher
                 if (on) Fill(g, new Rectangle(r.X, r.Y + 10, 3, 20), CAccent, 1);
                 Glyph(g, it[2], new Rectangle(r.X + 14, r.Y + 12, 16, 16), on ? CAccent : hov ? CText : CText2);
                 Txt(g, it[1], 14, on, on || hov ? CText : CText2, new Rectangle(r.X + 42, r.Y, 120, r.Height), DT_LEFT | DT_VCENTER | DT_SINGLELINE, 0, false);
-                if (it[0] == "installed" && installedCount > 0)
+                if (it[0] == "installed" && (installedCount > 0 || foundCount > 0))
                 {
-                    string n = installedCount.ToString();
+                    // (2026-11-19) the mods found in the game counted apart: "3 + 2 found" (just "3 + 2" next to the updates pill)
+                    string n = foundCount == 0 ? installedCount.ToString() : installedCount + " + " + foundCount + (updatesCount > 0 ? "" : " found");
                     int bw = TextWidth(n, 11, true, false) + 14;
                     var br = new Rectangle(r.Right - bw - 10, r.Y + 11, bw, 18);
                     Fill(g, br, CLine2, 9);
@@ -294,6 +303,7 @@ namespace FoxholeModLauncher
         {
             try { cosCache = CosMods(); } catch { cosCache = new List<Dictionary<string, object>>(); }
             installedCount = cosCache.Count;
+            FoundRefresh();                                        // (the mods found in the game, on a worker - LauncherFound.cs)
             try { ComputeUpdates(); } catch { modUpdates.Clear(); updatesCount = 0; }      // (the badges - LauncherModUpdates.cs)
             InstalledRefresh();                                    // (seen downloads + picture addresses, read on a worker)
         }
@@ -434,12 +444,16 @@ namespace FoxholeModLauncher
             // (mod updates - LauncherModUpdates.cs; the public edition before Nexus' approval: the button explains why there is no check yet)
             Btn(g, "mod:checkupdates", updatesChecking ? "Checking..." : "Check for mod updates", new Rectangle(CR - 498, CY, 194, 34), 1, !updatesChecking);
             var mods = cosCache;
-            int pages = Math.Max(1, (mods.Count + INSTALLED_ROWS - 1) / INSTALLED_ROWS);
+            var rows = InstalledRows();                                   // (2026-11-19: + the mods found in the game - LauncherFound.cs)
+            int pages = Math.Max(1, (rows.Count + INSTALLED_ROWS - 1) / INSTALLED_ROWS);
             if (modsPage >= pages) modsPage = pages - 1;
             int y = CY + 52;
-            for (int i = modsPage * INSTALLED_ROWS; i < Math.Min(mods.Count, (modsPage + 1) * INSTALLED_ROWS); i++, y += 70)
+            for (int i = modsPage * INSTALLED_ROWS; i < Math.Min(rows.Count, (modsPage + 1) * INSTALLED_ROWS); i++, y += 70)
             {
-                var m = mods[i];
+                if (rows[i] is string) { DrawFoundHead(g, new Rectangle(CX, y, CR - CX, 62)); continue; }
+                var fnd = rows[i] as FoundItem;
+                if (fnd != null) { DrawFoundRow(g, fnd, new Rectangle(CX, y, CR - CX, 62), free); continue; }
+                var m = (Dictionary<string, object>)rows[i];
                 string id = Str(m, "id");
                 var r = new Rectangle(CX, y, CR - CX, 62);
                 Fill(g, r, hover == "mod:info:" + id ? CSurf2 : CSurf, 10); Edge(g, r, CLine, 10);
@@ -477,14 +491,17 @@ namespace FoxholeModLauncher
                 Btn(g, "mod:rm:" + id, "", new Rectangle(r.Right - 74, r.Y + 13, 36, 36), 1, free);
                 Glyph(g, "trash", new Rectangle(r.Right - 64, r.Y + 23, 16, 16), CText2);
             }
-            if (mods.Count == 0)
+            if (mods.Count == 0 && modsPage == 0)
             {
-                var z = new Rectangle(CX, y, CR - CX, 200);
+                if (rows.Count > 0) y = CY + 52 + Math.Min(rows.Count, INSTALLED_ROWS) * 70;   // (below the found section: a smaller drop zone)
+                var z = new Rectangle(CX, y, CR - CX, Math.Min(200, CB - 44 - y));
+                if (z.Height >= 120) {
                 using (var p = Round(new Rectangle(z.X, z.Y, z.Width - 1, z.Height - 1), 12)) using (var pen = new Pen(CLine2, 1.5f) { DashStyle = DashStyle.Dash }) g.DrawPath(pen, p);
                 Glyph(g, "download", new Rectangle(z.X + z.Width / 2 - 14, z.Y + 46, 28, 28), CMuted);
                 Txt(g, PublicEdition ? "Drop a .pak or .zip here" : "Drop a .pak, .zip or .7z here", 15, true, CText, new Rectangle(z.X, z.Y + 88, z.Width, 24), DT_CENTER | DT_SINGLELINE, 0, false);
                 Txt(g, "or use Add mod file. Downloads from Browse mods are offered by themselves. Only .pak and settings files are ever kept.", 12, false, CMuted,
                     new Rectangle(z.X, z.Y + 116, z.Width, 20), DT_CENTER | DT_SINGLELINE, 0, false);
+                }
             }
             if (pages > 1)
             {

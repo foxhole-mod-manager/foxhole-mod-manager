@@ -44,12 +44,14 @@ namespace FoxholeModLauncher
 
         static Form DarkForm(string title, int w, int h)
         {
-            return new Form
+            var f = new Form
             {
                 Text = title, FormBorderStyle = FormBorderStyle.FixedDialog, StartPosition = FormStartPosition.CenterParent, MinimizeBox = false,
                 MaximizeBox = false, ShowInTaskbar = false, ClientSize = new Size(w, h), BackColor = Color.FromArgb(24, 24, 22),
                 ForeColor = Color.FromArgb(226, 221, 206), Font = new Font("Segoe UI", 10f)
             };
+            ScaleDialogOnLoad(f);                                        // (laid out in 96-DPI pixels: grown for the screen - LauncherWindow.cs)
+            return f;
         }
         static TextBox DarkBox(int x, int y, int w, string text)
         {

@@ -127,6 +127,7 @@ namespace FoxholeModLauncher
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             MouseMove += (s, e) => { string h = HitAt(e.Location); if (h != hover) { hover = h; Cursor = h != "" ? Cursors.Hand : Cursors.Default; Redraw(); } };
             MouseLeave += (s, e) => { if (hover != "") { hover = ""; Redraw(); } };
+            Deactivate += (s, e) => RoundOpenDialogs();                  // (the app's dialogs: rounded, silver edge - LauncherWindow.cs)
             MouseDown += (s, e) =>
             {
                 if (e.Button != MouseButtons.Left) return;
@@ -160,7 +161,7 @@ namespace FoxholeModLauncher
                 int by = e.Delta < 0 ? 1 : -1;
                 if (page == "installed")
                 {
-                    int pages = Math.Max(1, (cosCache.Count + INSTALLED_ROWS - 1) / INSTALLED_ROWS);
+                    int pages = Math.Max(1, (InstalledRows().Count + INSTALLED_ROWS - 1) / INSTALLED_ROWS);
                     int to = Math.Max(0, Math.Min(pages - 1, modsPage + by));
                     if (to != modsPage) { modsPage = to; Redraw(); }
                 }
@@ -276,13 +277,20 @@ namespace FoxholeModLauncher
             string face = txtHead ? HEAD_FACE : FACE;
             string k = face + px + (bold ? "b" : "");
             IntPtr f;
-            if (!fonts.TryGetValue(k, out f)) fonts[k] = f = CreateFontW(-px, 0, 0, 0, bold ? (txtHead && PublicEdition ? 600 : 700) : 400, 0, 0, 0, 1, 0, 0, 4, 0, face);
+            if (!fonts.TryGetValue(k, out f)) fonts[k] = f = CreateFontW(-px, 0, 0, 0, bold ? (txtHead && PublicEdition ? 600 : 700) : 400, 0, 0, 0, 1, 0, 0, (txtHead || bold) ? 4u : 5u, 0, face);
+            // (2026-11-19) quality 5 = ClearType for regular body text (crisper at 100% scaling); headings and bold labels keep greyscale 4 -
+            // ClearType with the heading's letter spacing / bold weight on coloured buttons smeared the glyphs ("Open Nexus Mods")
             return f;
         }
 
         // GDI text with a soft shadow (the art behind is busy)
         void Txt(Graphics g, string s, int px, bool bold, Color c, Rectangle r, uint fmt, int spacing, bool shadow)
         {
+            if (drawScale != 1f)                                          // (GDI text ignores the Graphics transform: font and box scaled here - LauncherWindow.cs)
+            {
+                r = new Rectangle((int)Math.Round(r.X * drawScale), (int)Math.Round(r.Y * drawScale), (int)Math.Round(r.Width * drawScale), (int)Math.Round(r.Height * drawScale));
+                px = Math.Max(1, (int)Math.Round(px * drawScale)); spacing = (int)Math.Round(spacing * drawScale);
+            }
             IntPtr hdc = g.GetHdc();
             try
             {
@@ -349,20 +357,25 @@ namespace FoxholeModLauncher
             hits.Clear();
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            drawScale = uiScale;                                                 // (2026-11-19: drawn at the window's real pixel size - LauncherWindow.cs)
+            g.ResetTransform();
+            if (drawScale != 1f) g.ScaleTransform(drawScale, drawScale);
             RenderShell(g);                                               // (LauncherShell.cs)
+            DrawOwnEdge(g);
         }
 
         void Redraw()
         {
             if (Headless) return;
-            if (frame == null) frame = new Bitmap(W, H, PixelFormat.Format24bppRgb);
+            var size = FrameSize();
+            if (frame == null || frame.Size != size) { if (frame != null) frame.Dispose(); frame = new Bitmap(size.Width, size.Height, PixelFormat.Format24bppRgb); }
             using (var g = Graphics.FromImage(frame)) Render(g);
             Invalidate();
         }
         protected override void OnPaint(PaintEventArgs e)
         {
             if (frame == null) Redraw();
-            if (uiScale == 1f) e.Graphics.DrawImageUnscaled(frame, 0, 0);
+            if (frame.Size == ClientSize) e.Graphics.DrawImageUnscaled(frame, 0, 0);
             else
             {
                 e.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
@@ -374,6 +387,9 @@ namespace FoxholeModLauncher
 
         void Shot(string png, string what)
         {
+            float shotScale = 1f;                                         // ("<state>@1.25": the frame drawn as on a screen at that scale)
+            int at = what.IndexOf('@');
+            if (at > 0) { float.TryParse(what.Substring(at + 1), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out shotScale); what = what.Substring(0, at); shotScale = Math.Max(0.6f, Math.Min(3f, shotScale)); }
             shotState = what;
             address = "";
             Release("1212c18aa", "2026-11-12 11:25:40", "");
@@ -401,16 +417,17 @@ namespace FoxholeModLauncher
             // (the sidebar with an old sandbox's changes found - Restore the game shown)
             if (what == "public-restore") { statusText = "Your Foxhole is still changed (the offline sandbox's changes are still in the game) - press RESTORE THE GAME before you play."; address = ""; releaseText = "";
                                             gameTrace = "the offline sandbox's changes are still in the game"; gameTraceRestorable = true; hover = "restore"; }
-            uiScale = 1f;
+            uiScale = shotScale;
             CountInstalled();
             if (what == "installed-update") ShotInstalledUpdate();
-            if (what == "installed-thumbs") ShotInstalledThumbs();      // (pictures on the rows - LauncherModUpdates.cs)
+            if (what == "installed-thumbs") ShotInstalledThumbs();
+            if (what == "installed-found") ShotInstalledFound();          // (the mods found in the game - LauncherFound.cs)      // (pictures on the rows - LauncherModUpdates.cs)
             if (what == "details") page = "activity";
             if (what.StartsWith("options")) page = what == "options-me" ? "tools" : "settings";
-            if (what == "mods") page = "tools";
-            if (what == "public-mods" || what == "installed" || what == "installed-update" || what == "installed-thumbs") page = "installed";
+            if (what == "mods" || what.StartsWith("maptool-")) page = "tools";       // (maptool-<state>: the map editor card's states - LauncherMapEditor.cs)
+            if (what == "public-mods" || what == "installed" || what == "installed-update" || what == "installed-thumbs" || what == "installed-found") page = "installed";
             if (what == "settings") page = "settings";
-            frame = new Bitmap(W, H, PixelFormat.Format24bppRgb);
+            frame = new Bitmap(FrameSize().Width, FrameSize().Height, PixelFormat.Format24bppRgb);
             using (var g = Graphics.FromImage(frame)) Render(g);
             frame.Save(png, ImageFormat.Png);
         }

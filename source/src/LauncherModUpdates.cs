@@ -499,7 +499,7 @@ namespace FoxholeModLauncher
                 }
             }
         }
-        static readonly string[] UPDATED_FIELDS = { "name", "source", "nexus", "nexus_file", "sha256", "paks", "configs", "ignored" };
+        static readonly string[] UPDATED_FIELDS = { "name", "source", "nexus", "nexus_file", "sha256", "paks", "companions", "configs", "ignored" };
         static int VerdictRank(string v)
         {
             if (v == "OK" || v == "") return 0;

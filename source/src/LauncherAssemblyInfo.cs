@@ -18,8 +18,10 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 // (the public app's version: its update check compares it with update.json - 1.1.0, 2026-11-18: the offline sandbox taken out;
-//  1.1.1: no .7z support, fewer Windows calls, complete version details - fewer things for antivirus heuristics to react to)
-[assembly: AssemblyVersion("1.1.1.0")]
-[assembly: AssemblyFileVersion("1.1.1.0")]
-[assembly: AssemblyInformationalVersion("1.1.1")]
+//  1.1.1: no .7z support, fewer Windows calls, complete version details - fewer things for antivirus heuristics to react to;
+//  1.1.2: sharp text on scaled screens (DPI aware), rounded window with a silver edge, mods found in the game shown on Installed)
+[assembly: AssemblyVersion("1.1.2.0")]
+[assembly: AssemblyFileVersion("1.1.2.0")]
+[assembly: AssemblyInformationalVersion("1.1.2")]
 [assembly: ComVisible(false)]
+[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
