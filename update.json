@@ -1,6 +1,6 @@
 {
-  "version": "1.1.1",
-  "notes": "Smaller and simpler: .7z mods are no longer unpacked by the app (unpack them with 7-Zip first, then add the .pak - or zip the unpacked files and add the .zip). If you used the old offline sandbox, press Restore the game once.",
+  "version": "1.1.2",
+  "notes": "Sharp text on scaled screens (125 % and up), a rounded window with a thin silver edge on Windows 11, and mods you installed by hand now show up in Installed under Found in your game - one click lets the app manage them.",
   "sandbox_off": {
     "all": true,
     "below_app": "1.1.0",
