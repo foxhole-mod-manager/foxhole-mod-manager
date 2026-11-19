@@ -19,12 +19,11 @@ For a build of your own, put your repository there (the example: `public_release
 still builds and runs; the update check then reports that it has no update source.
 
 ## Layout
-- `src\` - the C# source (C# 5). `ExePatcher.cs` and `PakIni.cs` are the patch helpers the offline sandbox uses.
+- `src\` - the C# source (C# 5). `PakIni.cs` reads the game pak's network settings (used by *Restore the game*).
 - `resources\` - the icon, the logo pictures and the application manifest.
 
-## What is not in this source
-The offline sandbox also uses separate, closed components that are shipped next to the app in its download: `FoxServer.dll`,
-`FoxClient.dll`, `X3DAudio1_7.dll`, `patch.json`, the server address caches and `sandbox.txt`. They are separate programs under
-their own license (`LICENSE-SANDBOX.txt` in the repository), not part of this program, and they are **not needed to compile it**.
-Without them the app works for cosmetic mods and Browse mods; the offline sandbox needs them. UE4SS (MIT) is shipped with the
-download too and keeps its own license.
+## What the app does to the game
+Nothing is loaded into or started inside the game: *Play* starts Foxhole through Steam, cosmetic mods are files in the game's mod
+folder, and *Restore the game* only puts back original files that the offline sandbox of version 1.0.0 changed (the game exe from its
+backup, the network settings in the game pak, the items it added to `War\Binaries\Win64`, set-aside mod files) and removes its local
+server copy. The offline sandbox itself is not part of this version.

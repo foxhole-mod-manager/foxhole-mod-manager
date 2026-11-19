@@ -505,7 +505,7 @@ namespace FoxholeModLauncher
             if (v == "OK" || v == "") return 0;
             if (v == "WARNING") return 1;
             if (v == "WILL NOT LOAD") return 3;
-            return 2;                                                    // (SANDBOX ONLY / OUR SERVERS ONLY)
+            return 2;                                                    // (WON'T LOAD ONLINE / OUR SERVERS ONLY)
         }
         // (review S7) a worse verdict than the installed version's: asked (headless: --yes = yes, else no)
         bool AskWorseVerdict(Dictionary<string, object> m, string verdict, string notes, bool yes)
@@ -625,7 +625,7 @@ namespace FoxholeModLauncher
             var a = mk("better-map-icons-1a2b3c", "Better Map Icons", "Better Map Icons-112-1-2-1760000000.7z", true, "OK");
             var b = mk("clear-water-4d5e6f", "Clear Water", "Clear Water-87-2-0-1761000000.zip", false, "OK");
             b["previous"] = new Dictionary<string, object> { { "source", "Clear Water-87-1-9-1755000000.zip" } };
-            var c = mk("lod-fix-7a8b9c", "LOD fix", "lodfix.zip", true, PublicEdition ? "SANDBOX ONLY" : "OUR SERVERS ONLY");
+            var c = mk("lod-fix-7a8b9c", "LOD fix", "lodfix.zip", true, VERDICT_EDITION);
             c["notes"] = new List<string> { "settings: replaces your Scalability.ini while ON (yours is kept and put back on OFF)" };
             cosCache = new List<Dictionary<string, object>> { a, b, c };
             installedCount = cosCache.Count;

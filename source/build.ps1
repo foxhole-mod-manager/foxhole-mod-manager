@@ -15,7 +15,7 @@ $rel = Join-Path $here 'public_release.json'
 if (Test-Path $rel) { $res += "/resource:$rel,public_release.json" }
 $manifest = Join-Path $here 'resources\launcher.manifest'
 $src = Join-Path $here 'src'
-$files = @((Get-ChildItem (Join-Path $src 'Launcher*.cs')).FullName) + @((Join-Path $src 'ExePatcher.cs'), (Join-Path $src 'PakIni.cs'))
+$files = @((Get-ChildItem (Join-Path $src 'Launcher*.cs')).FullName) + @((Join-Path $src 'PakIni.cs'))
 & $csc /nologo /target:winexe /optimize+ /define:PUBLIC /out:$Out "/win32manifest:$manifest" `
     /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll `
     "/lib:$(Join-Path (Split-Path $csc) 'WPF')" /r:PresentationCore.dll /r:WindowsBase.dll /r:System.Xaml.dll `

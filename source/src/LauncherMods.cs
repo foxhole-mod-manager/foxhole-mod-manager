@@ -110,10 +110,12 @@ namespace FoxholeModLauncher
         // (UI thread, review S3) the store may change now: not while a launcher update / Play / Restore runs (buttons off) or the offline
         // sandbox is on (it set the player's mod files aside); else a line says why
         bool ModsFree() { return buttonsOn && !offlineBusy && !busy; }
+        const string VERDICT_PARTLY = "WON'T LOAD ONLINE";
+        const string VERDICT_EDITION = VERDICT_PARTLY;
         bool ModsFreeOrSay()
         {
             if (ModsFree()) return true;
-            modsLine = offlineBusy ? "The offline sandbox is on - mods change once it has ended." : "Busy - try again when the current step has finished.";
+            modsLine = offlineBusy ? "The game is being restored - mods change once that has finished." : "Busy - try again when the current step has finished.";
             Redraw();
             return false;
         }
@@ -593,7 +595,7 @@ namespace FoxholeModLauncher
         }
 
         // ---------------------------------------------------------------------------------------------------- compatibility check
-        // every mod's verdict + notes (OK / WARNING / OUR SERVERS ONLY / WILL NOT LOAD); conflicts need all of them at once
+        // every mod's verdict + notes (OK / WARNING / OUR SERVERS ONLY (public: VERDICT_PARTLY) / WILL NOT LOAD); conflicts need all of them at once
         void CosCheckAll() { lock (cosLock) CosCheckAllLocked(); }
         void CosCheckAllLocked()
         {
@@ -640,7 +642,7 @@ namespace FoxholeModLauncher
                     notes.Add("replaces " + replaced + " game file(s)");
                     if (unofficial > 0)
                     {
-                        if (verdict == "OK") verdict = PublicEdition ? "SANDBOX ONLY" : "OUR SERVERS ONLY";   // (public: the sandbox lifts the game's mod-file filter, official play does not)
+                        if (verdict == "OK") verdict = VERDICT_EDITION;   // (official play ignores those files; the private servers lift that filter)
                         notes.Add(unofficial + " of them outside the folders official Foxhole accepts from mods (e.g. " + firstUnofficial + ") - official Foxhole ignores those");
                     }
                     if (unknown > 0)

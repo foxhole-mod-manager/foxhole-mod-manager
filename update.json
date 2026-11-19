@@ -1,4 +1,9 @@
 {
-  "version": "1.0.0",
-  "notes": "First release: cosmetic mods, the Nexus browser (once Nexus approves the app) and the offline sandbox."
+  "version": "1.1.0",
+  "notes": "The offline sandbox is removed for now. If you used it, press Restore the game once - it puts the original game files back.",
+  "sandbox_off": {
+    "all": true,
+    "below_app": "1.1.0",
+    "message": "The offline sandbox is removed for now - update the app to 1.1.0 and press Restore the game."
+  }
 }

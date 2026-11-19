@@ -47,10 +47,12 @@ namespace FoxholeModLauncher
             "The browser asks Nexus Mods for its public list of Foxhole mods. Nexus and its image servers see your IP address and this app's " +
             "name, as any website does; no account, no Steam ID and nothing about your PC is sent; no tracking or analytics.\n\n" +
             "DOWNLOAD opens Nexus in your own browser, under Nexus' privacy policy.\n\n" +
-            "The list and thumbnails are kept on this PC only (CLEAR CACHE deletes them).\n\nData from Nexus Mods. Every mod belongs to its author."
-            + "\n\nCHECK FOR UPDATES, and once before each offline sandbox start, the app reads one small file (update.json) from the project's " +
-            "GitHub repository (raw.githubusercontent.com): the newest version, and whether a Foxhole update stops the sandbox for now. GitHub sees " +
-            "your IP address and this app's name, as any website does; nothing else is sent."
+            "The list and thumbnails are kept on this PC only (CLEAR CACHE deletes them).\n\nData from Nexus Mods. Every mod belongs to its author.\n\n" +
+            ".7z MODS: unpacking one needs 7-Zip's small console tool (7zr.exe). With your OK - asked once - the app downloads it from 7-Zip's " +
+            "official site, www.7-zip.org, and checks it against a pinned checksum. 7-zip.org sees your IP address and this app's name, as any " +
+            "website does; nothing else is sent."
+            + "\n\nCHECK FOR UPDATES reads one small file (update.json) from the project's GitHub repository (raw.githubusercontent.com): the " +
+            "newest version. GitHub sees your IP address and this app's name, as any website does; nothing else is sent."
             ;
 
         const string UPDATES_PRIVACY =
@@ -217,7 +219,7 @@ namespace FoxholeModLauncher
                 string dir = AppDomain.CurrentDomain.BaseDirectory, gpl = Path.Combine(dir, "LICENSE.txt");
                 if (File.Exists(gpl)) try { Process.Start(new ProcessStartInfo(gpl) { UseShellExecute = true }); } catch { }
                 else MessageBox.Show(this, "This app is free software under the GNU General Public License version 3 only (GPL-3.0-only, https://www.gnu.org/licenses/gpl-3.0.html), " +
-                    "with ABSOLUTELY NO WARRANTY. The license files (LICENSE.txt, LICENSE-SANDBOX.txt, THIRD-PARTY.txt) come with the download.",
+                    "with ABSOLUTELY NO WARRANTY. The license (LICENSE.txt) comes with the download.",
                     "Licenses", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             else if (h == "prev") BrowseTurn(-1);
@@ -367,19 +369,19 @@ namespace FoxholeModLauncher
                     DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, 0, false);
                 return;
             }
-            var sb = new Rectangle(CX, 12, 300, 36);
+            var sb = new Rectangle(CX, 12, 270, 36);                     // (270: the public PLAY pill is 222 wide - the row ends before it)
             bool focus = browseSearch != null && browseSearch.Focused;
             Fill(g, sb, CSurf, 8); Edge(g, sb, focus ? CAccent : CFaint, 8, focus ? 1.6f : 1f);
             Glyph(g, "search", new Rectangle(sb.X + 12, sb.Y + 10, 16, 16), CMuted);
             Txt(g, "Ctrl F", 12, false, CMuted, new Rectangle(sb.Right - 58, sb.Y, 48, sb.Height), DT_RIGHT | DT_VCENTER | DT_SINGLELINE, 0, false);
-            Btn(g, "br:sort", "Sort: " + SortLabels[browseSort], new Rectangle(CX + 312, 12, 184, 36), 1, true);
-            Btn(g, "br:adult", browseAdult ? "Adult: shown" : "Adult: hidden", new Rectangle(CX + 504, 12, 124, 36), 1, true);
+            Btn(g, "br:sort", "Sort: " + SortLabels[browseSort], new Rectangle(CX + 282, 12, 184, 36), 1, true);
+            Btn(g, "br:adult", browseAdult ? "Adult: shown" : "Adult: hidden", new Rectangle(CX + 474, 12, 124, 36), 1, true);
         }
         static readonly string[] SortLabels = { "Most downloaded", "Most endorsed", "Recently updated", "Name" };
         void PlaceSearchBox()
         {
             if (browseSearch == null) return;
-            browseSearch.SetBounds((int)((CX + 36) * uiScale), (int)(19 * uiScale), (int)(222 * uiScale), (int)(24 * uiScale));
+            browseSearch.SetBounds((int)((CX + 36) * uiScale), (int)(19 * uiScale), (int)(192 * uiScale), (int)(24 * uiScale));
             var old = browseSearch.Font;
             browseSearch.Font = new Font("Segoe UI", 11f * uiScale);
             if (old != null && old != Control.DefaultFont) old.Dispose();

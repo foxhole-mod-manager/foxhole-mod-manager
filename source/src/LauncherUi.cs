@@ -67,8 +67,16 @@ namespace FoxholeModLauncher
             if (ModsCommandLine(args)) return;                            // (cosmetic mod commands without a window - LauncherMods.cs)
             if (NexusCommandLine(args)) return;
             if (ModUpdatesCommandLine(args)) return;                      // (--mod-updates-check <ids> / --mod-updates - LauncherModUpdates.cs)
-            if (SandboxCommandLine(args)) return;                         // (--sandbox-install / -revert / -stop / -play - LauncherSandbox.cs)
+            if (SandboxCommandLine(args)) return;                         // (--sandbox-revert / -livecheck / -changed / -leftovers / -trace - LauncherSandbox.cs)
             if (MachineCommandLine(args)) return;                         // (--machine <file>: what the launcher reads of this PC - LauncherMachine.cs)
+            // (tests) the PLAY pill's mode from the options and what this edition lets be clicked: --play-ui [id...] -> "mode: <name>" + "click <id>: yes|no"
+            if (args.Length >= 1 && args[0] == "--play-ui")
+            {
+                AttachConsole(-1);
+                Console.WriteLine("mode: " + PlayModeName());
+                for (int i = 1; i < args.Length; i++) Console.WriteLine("click " + args[i] + ": " + (ClickAllowed(args[i]) ? "yes" : "no"));
+                return;
+            }
             if (args.Length == 0 && !SingleInstance()) return;           // (a second start: the open window comes to the front)
             var l = new Launcher();
             if (args.Length >= 2 && args[0] == "--shot") { l.Shot(args[1], args.Length > 2 ? args[2] : "idle"); return; }
@@ -210,20 +218,23 @@ namespace FoxholeModLauncher
             Ui(() => { releaseText = ("RELEASE " + c + "   " + when).Trim(); Redraw(); });
         }
 
-        static readonly string[] PublicClicks = { "close", "min", "offline", "restore", "set:restore", "pubupdate", "hdr:offline", "playmode", "hdr:playmode", "opt:lowspec" };
+        static readonly string[] PublicClicks = { "close", "min", "offline", "restore", "set:restore", "pubupdate", "hdr:offline", "opt:lowspec" };
         // ("mod:" covers Installed in both editions: on: / rm: / info: / add / prev / next and, 2026-11-18, the mod updates' checkupdates /
         //  update:<id> / rollback:<id> - LauncherModUpdates.cs; mod:catalog is private only)
         static readonly string[] PublicPrefixes = { "nav:", "side:", "br:", "mod:" };
-        static bool ClickAllowed(string h)
+        static readonly string[] PublicOnlyClicks = { "offline", "hdr:offline", "restore", "set:restore", "pubupdate" };
+        internal static bool ClickAllowed(string h)
         {
             if (h == "") return false;
-            bool pub = h == "offline" || h == "restore" || h == "set:restore" || h == "pubupdate" || h == "hdr:offline" || h == "playmode" || h == "hdr:playmode";
-            if (!PublicEdition) return !pub;
+            if (!PublicEdition) return Array.IndexOf(PublicOnlyClicks, h) < 0;
             if (Array.IndexOf(PublicClicks, h) >= 0) return true;
             if (h == "mod:catalog") return false;
             foreach (var x in PublicPrefixes) if (h.StartsWith(x)) return true;
             return false;
         }
+        // the PLAY pill's chosen mode by its option value (LauncherShell.cs PlaySplit): public "official" | "offline" (the public release has
+        // no mode list - it only plays the live war), private "server" | "offline"; anything else = the default
+        static string PlayModeName() { return Str(Options(), "play_mode") == "offline" ? "offline" : PublicEdition ? "official" : "server"; }
         void Click_(string h)
         {
             if (!ClickAllowed(h)) return;
@@ -233,8 +244,7 @@ namespace FoxholeModLauncher
             else if (h.StartsWith("nav:")) Go(h.Substring(4));
             else if (h.StartsWith("side:")) Go(h.Substring(5));
             else if (h.StartsWith("br:")) BrowseClick(h.Substring(3));    // (LauncherBrowse.cs)
-            else if (h == "offline") { if (PlayOffline()) OfflinePlayClick(); else OfficialPlayClick(); }
-            else if (h == "playmode") PlayModeMenu();
+            else if (h == "offline") OfficialPlayClick();
             else if (h == "restore" || h == "set:restore") OfflineRestoreClick();
             else if (h == "pubupdate") OfflineCheckUpdate();
             else if (h.StartsWith("mod:")) ModsClick(h.Substring(4));
@@ -391,8 +401,12 @@ namespace FoxholeModLauncher
                 machineClass = MachineClass.BELOW; machineLine = "BELOW MINIMUM - integrated graphics (Intel(R) UHD Graphics 620) sharing 8 GB of memory";
             }
             if (what == "browse" || what == "browse-detail") { statusText = ""; address = ""; ShotBrowse(what == "browse-detail"); }
-            if (what == "public") { statusText = "Ready - the arrow on PLAY switches between the live war and the offline sandbox."; address = ""; releaseText = ""; }
-            if (what == "public-mods") { modsOpen = true; hover = "mod:add"; statusText = "Ready - the arrow on PLAY switches between the live war and the offline sandbox."; address = ""; }
+            const string ready = "Ready - PLAY starts the live war through Steam.";
+            if (what == "public") { statusText = ready; address = ""; releaseText = ""; }
+            if (what == "public-mods") { modsOpen = true; hover = "mod:add"; statusText = ready; address = ""; }
+            // (the sidebar with an old sandbox's changes found - Restore the game shown)
+            if (what == "public-restore") { statusText = "Your Foxhole is still changed (the offline sandbox's changes are still in the game) - press RESTORE THE GAME before you play."; address = ""; releaseText = "";
+                                            gameTrace = "the offline sandbox's changes are still in the game"; gameTraceRestorable = true; hover = "restore"; }
             uiScale = 1f;
             CountInstalled();
             if (what == "installed-update") ShotInstalledUpdate();

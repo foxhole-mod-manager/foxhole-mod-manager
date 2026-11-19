@@ -24,7 +24,8 @@ namespace FoxholeModLauncher
 
     partial class Launcher
     {
-        // (tests, no window) --sandbox-install <game> | --sandbox-revert <game> | --sandbox-stop <game> | --sandbox-play <game> <map> <0|1>
+        internal static string AppDataPath { get { return DataDir; } }   // (the app's data folder - Launcher.cs; tests: FOX_LAUNCHER_DATA_DIR)
+        // (tests, no window) - see the file header
         static bool SandboxCommandLine(string[] args)
         {
             if (args.Length < 2 || !args[0].StartsWith("--sandbox-")) return false;
@@ -34,14 +35,27 @@ namespace FoxholeModLauncher
             Environment.ExitCode = 0;
             try
             {
-                if (args[0] == "--sandbox-install") Sandbox.Install(args[1]);
-                else if (args[0] == "--sandbox-revert") { string note = Sandbox.Revert(args[1]); if (note != "") Console.WriteLine("NOTE: " + note); }
-                else if (args[0] == "--sandbox-stop") Console.WriteLine("stopped " + Sandbox.Stop(args[1]) + " process(es)");
-                else if (args[0] == "--sandbox-play" && args.Length >= 4) Sandbox.Play(args[1], args[2], args[3]);
+                if (args[0] == "--sandbox-revert") { string note = Sandbox.Revert(args[1]); if (note != "") Console.WriteLine("NOTE: " + note); }
+                // (tests, review A) what the app's start does with a session record left in its data folder: "marker: none" / "marker: kept" (a
+                // sandbox's, the restore follows) / "marker: dropped (server kit)" (exit 4 - the record goes, the game is not touched)
+                else if (args[0] == "--sandbox-marker")
+                {
+                    string mk = Path.Combine(DataDir, "offline_session.json");
+                    if (!File.Exists(mk)) Console.WriteLine("marker: none");
+                    else if (Sandbox.KitNotOurs(args[1])) { File.Delete(mk); Console.WriteLine("marker: dropped (server kit)"); Environment.ExitCode = 4; }
+                    else Console.WriteLine("marker: kept");
+                }
                 // (tests) the Live War guard and the restore's no-state-folder check: prints the reason or "none"; exit 3 = blocked / changed
                 else if (args[0] == "--sandbox-livecheck") { string w = Sandbox.LiveWarBlock(args[1]); Console.WriteLine("live war: " + (w ?? "none")); if (w != null) Environment.ExitCode = 3; }
                 else if (args[0] == "--sandbox-changed") { string w = Sandbox.ChangedWithoutState(args[1]); Console.WriteLine("changed: " + (w ?? "none")); if (w != null) Environment.ExitCode = 3; }
                 else if (args[0] == "--sandbox-leftovers") Console.WriteLine("leftovers: " + Sandbox.HasLeftovers(args[1]) + " | " + Sandbox.LeftoverText(args[1]));
+                // (tests) what the sidebar shows: "trace: none" / "trace: restore | <why>" (exit 3) / "trace: kit | <why>" (exit 4)
+                else if (args[0] == "--sandbox-trace")
+                {
+                    bool restorable; string w = Sandbox.Trace(args[1], File.Exists(Path.Combine(DataDir, "offline_session.json")), out restorable);
+                    Console.WriteLine("trace: " + (w == null ? "none" : (restorable ? "restore | " : "kit | ") + w));
+                    if (w != null) Environment.ExitCode = restorable ? 3 : 4;
+                }
                 else { Console.WriteLine("unknown sandbox command"); Environment.ExitCode = 2; }
             }
             catch (Exception ex) { Console.WriteLine("ERROR: " + ex.Message); Environment.ExitCode = 1; }
@@ -51,20 +65,19 @@ namespace FoxholeModLauncher
 
     class SandboxPaths
     {
-        public string Game, Win64, Exe, Pak, State, Backup, Server, Remote, Info, Fox;
+        public string Game, Win64, Exe, Pak, State, Backup, Server, Remote, Info;
         public SandboxPaths(string game, string pakRel)
         {
             Game = Path.GetFullPath(game).TrimEnd('\\');
             Win64 = Path.Combine(Game, Sandbox.WIN64_REL);
             Exe = Path.Combine(Win64, Sandbox.EXE_NAME);
             Pak = Path.GetFullPath(Path.Combine(Game, pakRel.Replace('/', '\\')));
-            if (!Pak.StartsWith(Game + "\\", StringComparison.OrdinalIgnoreCase)) throw new SandboxFail("bad pak path in patch.json");
+            if (!Pak.StartsWith(Game + "\\", StringComparison.OrdinalIgnoreCase)) throw new SandboxFail("bad game pak path");
             State = Path.Combine(Game, "_FoxholeOffline");
             Backup = Path.Combine(State, "backup");
             Server = Path.Combine(State, "server");
             Remote = Path.Combine(State, "remote");
             Info = Path.Combine(State, "install.json");
-            Fox = Path.Combine(State, "foxserver");
         }
     }
 
@@ -78,17 +91,18 @@ namespace FoxholeModLauncher
         };
         public static Action<string> Log = s => { };                       // (the launcher's Say)
 
-        static string Kit { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "kit"); } }
-        static string Payload { get { return Path.Combine(Kit, "payload"); } }
-        static Dictionary<string, object> patch;
-        static Dictionary<string, object> Patch
-        {
-            get
-            {
-                if (patch == null) patch = new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(Payload, "patch.json"))) as Dictionary<string, object>;
-                return patch;
-            }
-        }
+        // (restore only - no kit is shipped) the fingerprints the 1.0.0 sandbox kit's patch.json held, plus the exe it patched on the game
+        // build that was live at its release (26058282); every exe a 1.0.0 app patched is also in the game's install.json and in the app's own record
+        // (sandbox_exe_hashes.json in its data folder)
+        static readonly Dictionary<string, object> Patch = new Dictionary<string, object> {
+            { "exe", new Dictionary<string, object> {
+                { "vanilla_sha256", "ED99E371A3742AF48BEE4B19D9E0CE4E58595F556523E39B8CEDC98B62E90ABF" },
+                { "patched_sha256", "E05AF76120BA854EED939D00B1504BB0A114645815A2C7434623777F73EBAC6C" },
+                { "older_patched_sha256", new object[] { "B2433656A044665C5FCF1BD22952FE7AFA21B8463BA9BD6EDB9217F5C50E0AB8",
+                                                         "2277BA520E0495E6D1D18285A5190E92263D8B3501D94677431890B688B80925" } },
+                { "known_vanilla_sha256", new object[] { "6CC174C5BC26242E4AD191871E35A67D9BAAD603E5AB88512F8701AA6CAE81E3" } },
+                { "known_patched_sha256", new object[] { "2D3DD7F4EB37C5E461D490A5B2964E8AF86720999F8BE9898E2C497A376A2232" } } } },
+            { "pak", new Dictionary<string, object> { { "path", "War/Content/Paks/War-WindowsNoEditor.pak" } } } };
         static Dictionary<string, object> PatchPart(string k) { return Patch[k] as Dictionary<string, object>; }
         static string PatchStr(string part, string k) { var d = PatchPart(part); return d != null && d.ContainsKey(k) && d[k] != null ? d[k].ToString() : ""; }
         static List<string> PatchList(string part, string k)
@@ -106,7 +120,6 @@ namespace FoxholeModLauncher
         {
             using (var s = File.OpenRead(path)) using (var h = SHA256.Create()) return BitConverter.ToString(h.ComputeHash(s)).Replace("-", "");
         }
-        static string Sha256Bytes(byte[] b) { using (var h = SHA256.Create()) return BitConverter.ToString(h.ComputeHash(b)).Replace("-", ""); }
         static bool Same(string a, string b) { return string.Equals(a, b, StringComparison.OrdinalIgnoreCase); }
         static byte[] ReadRegion(string path, long offset, int size)
         {
@@ -144,12 +157,6 @@ namespace FoxholeModLauncher
             foreach (var s in Directory.GetDirectories(d)) DeleteTree(s);
             Directory.Delete(d, false);
         }
-        static void CopyTree(string from, string to)
-        {
-            Directory.CreateDirectory(to);
-            foreach (var f in Directory.GetFiles(from)) File.Copy(f, Path.Combine(to, Path.GetFileName(f)), true);
-            foreach (var s in Directory.GetDirectories(from)) CopyTree(s, Path.Combine(to, Path.GetFileName(s)));
-        }
         // a Win64 item name, or a pattern with * (addresses-*.txt) -> the matching paths
         static IEnumerable<string> Matches(string dir, string item)
         {
@@ -158,7 +165,6 @@ namespace FoxholeModLauncher
             string p = Path.Combine(dir, item);
             if (File.Exists(p) || Directory.Exists(p)) yield return p;
         }
-        static bool Exists(string dir, string item) { return Matches(dir, item).Any(); }
         // anything at that path - a file, a folder, a link (also a dangling one) - WITHOUT following a link (GetFileAttributesW reports the
         // link itself)
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern uint GetFileAttributesW(string path);
@@ -177,7 +183,6 @@ namespace FoxholeModLauncher
             }
             return d != null && Same(d.TrimEnd('\\'), root.TrimEnd('\\'));
         }
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool CreateHardLinkW(string link, string target, IntPtr sec);
         static List<string> SafeFiles(string dir)
         {
             var r = new List<string>();
@@ -198,15 +203,9 @@ namespace FoxholeModLauncher
             using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None)) { fs.Write(data, 0, data.Length); fs.Flush(true); }
             if (File.Exists(path)) File.Replace(tmp, path, null); else File.Move(tmp, path);
         }
-        static void CopyDurable(string src, string dst)
-        {
-            File.Copy(src, dst, true);
-            using (var fs = new FileStream(dst, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) fs.Flush(true);
-        }
         static void SaveRecord(SandboxPaths p, Dictionary<string, object> o) { WriteAtomic(p.Info, Encoding.ASCII.GetBytes(new JavaScriptSerializer().Serialize(o))); }
 
         // ---------------------------------------------------------------------------------------------------- state
-        static string PatcherHints(bool known) { return known ? PatchStr("exe", "cave_hints") : ""; }
         static Dictionary<string, object> Record(SandboxPaths p)
         {
             try { return File.Exists(p.Info) ? new JavaScriptSerializer().DeserializeObject(File.ReadAllText(p.Info)) as Dictionary<string, object> : null; }
@@ -225,14 +224,20 @@ namespace FoxholeModLauncher
             if (!File.Exists(p.Exe)) return "missing";
             string h = Sha256File(p.Exe);
             if (Same(h, PatchStr("exe", "vanilla_sha256"))) return "vanilla";
-            foreach (var x in PatchList("exe", "patched_sha256").Concat(PatchList("exe", "older_patched_sha256"))) if (Same(h, x)) return "patched";
+            foreach (var x in PatchedShas()) if (Same(h, x)) return "patched";
             var rec = Record(p);
             if (rec != null && Same(h, RecStr(rec, "ExePatchedSha"))) return "patched";
             if (KnownHashes("patched").Any(x => Same(x, h))) return "patched";       // (review B: the app's own record, kept outside the game)
             if (rec != null && Same(h, RecStr(rec, "ExeVanillaSha"))) return "vanilla-new";
             if (KnownHashes("vanilla").Any(x => Same(x, h))) return "vanilla-new";
-            if (FhoExePatcher.Apply(File.ReadAllBytes(p.Exe), "") == "") return "vanilla-new";
+            if (PatchList("exe", "known_vanilla_sha256").Any(x => Same(x, h))) return "vanilla-new";
+            // (no exe patcher in this build: an exe nobody recorded - e.g. a Steam update - stays "unknown"; the restore leaves it alone)
             return "unknown";
+        }
+        // every patched-exe fingerprint the app knows from its data (not the game's own record)
+        static List<string> PatchedShas()
+        {
+            return PatchList("exe", "patched_sha256").Concat(PatchList("exe", "older_patched_sha256")).Concat(PatchList("exe", "known_patched_sha256")).ToList();
         }
         public static string PakState(SandboxPaths p)
         {
@@ -243,7 +248,7 @@ namespace FoxholeModLauncher
         // (review B) the exe hashes this app produced / started from, kept in its OWN data folder (%LOCALAPPDATA%\FoxholeModManager) - they
         // survive a revert and a deleted _FoxholeOffline folder, so a patched exe is still recognised as patched when the game's own record
         // is gone. {"patched": [sha...], "vanilla": [sha...]}; written at install time BEFORE the patched exe is.
-        static string AppDataDir { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FoxholeModManager"); } }
+        static string AppDataDir { get { return Launcher.AppDataPath.TrimEnd('\\'); } }   // (%LOCALAPPDATA%\FoxholeModManager - Launcher.cs DataDir)
         static string KnownHashFile { get { return Path.Combine(AppDataDir, "sandbox_exe_hashes.json"); } }
         static Dictionary<string, object> ReadKnown()
         {
@@ -253,20 +258,6 @@ namespace FoxholeModLauncher
         static List<string> KnownHashes(string kind)
         {
             return RecList(ReadKnown(), kind).Where(x => System.Text.RegularExpressions.Regex.IsMatch(x, "^[0-9A-Fa-f]{64}$")).ToList();
-        }
-        static void RememberExeHashes(string vanilla, string patched)    // (throws when it cannot be written: the install stops before the exe changes)
-        {
-            var d = new Dictionary<string, object>();
-            foreach (var kv in new[] { new KeyValuePair<string, string>("vanilla", vanilla), new KeyValuePair<string, string>("patched", patched) })
-            {
-                var l = KnownHashes(kv.Key);
-                if (!l.Any(x => Same(x, kv.Value))) l.Add(kv.Value.ToUpperInvariant());
-                if (l.Count > 64) l = l.Skip(l.Count - 64).ToList();
-                d[kv.Key] = l.ToArray();
-            }
-            Directory.CreateDirectory(AppDataDir);
-            WriteAtomic(KnownHashFile, Encoding.ASCII.GetBytes(new JavaScriptSerializer().Serialize(d)));
-            if (!KnownHashes("patched").Any(x => Same(x, patched))) throw new SandboxFail("Could not record the patched exe's fingerprint in " + AppDataDir + ". Nothing was changed.");
         }
         // the exe's SHA-256, cached by path + size + last write time (the Live War button must not read 80 MB on every click)
         static readonly Dictionary<string, string> shaCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -296,7 +287,7 @@ namespace FoxholeModLauncher
             {
                 var p = PathsOf(game);
                 pak = p.Pak;
-                patchedShas.AddRange(PatchList("exe", "patched_sha256").Concat(PatchList("exe", "older_patched_sha256")));
+                patchedShas.AddRange(PatchedShas());
             }
             catch { }
             const string fix = " - press \"Restore the game\" first; if that does not help, run Steam's \"Verify integrity of game files\" for Foxhole.";
@@ -373,125 +364,6 @@ namespace FoxholeModLauncher
             catch { return false; }
         }
 
-        public static void Install(string game)
-        {
-            var p = PathsOf(game);
-            if (!File.Exists(p.Exe)) throw new SandboxFail("Not a Foxhole folder: " + game);
-            if (GameProcesses(game).Count > 0) throw new SandboxFail("Foxhole is running. Close it first.");
-            // (review A3) the refusals Revert has, BEFORE anything is written: a revert must always be able to undo what an install did
-            Refusals(p, "set up");
-            string bw = Path.Combine(p.Backup, "Win64");
-            var rec0 = Record(p);
-            var moved0 = RecList(rec0, "MovedWin64Items");
-            foreach (var item in Win64Items)                               // (an earlier backup of a Win64 item next to a file of that name: whose? never guessed)
-                if (EntryExists(Path.Combine(bw, item)) && EntryExists(Path.Combine(p.Win64, item)) && !moved0.Contains(item))
-                    throw new SandboxFail("An earlier backup of " + item + " waits in " + bw + " and War\\Binaries\\Win64 has one of that name too - press Restore the game first. Nothing was changed.");
-            Log("Checking game files (this reads the 80 MB game exe)...");
-            string exeState = ExeState(p), pakState = PakState(p);
-            string exeBackup = Path.Combine(p.Backup, EXE_NAME);
-            string vanillaSha = PatchStr("exe", "vanilla_sha256");
-            // (review C4) an UNKNOWN exe is never replaced by an old backup here (a Steam update would be overwritten by an older build) -
-            // only Revert puts a backup back, and only over an exe this app patched or could not read
-            int recVersion = 1; int.TryParse(RecStr(rec0, "ExePatcherVersion"), out recVersion); if (recVersion == 0) recVersion = 1;
-            if (exeState == "patched" && recVersion < FhoExePatcher.Version && File.Exists(exeBackup))
-            {
-                string b = Sha256File(exeBackup);
-                if (Same(b, vanillaSha) || (rec0 != null && Same(b, RecStr(rec0, "ExeVanillaSha")))) { File.Copy(exeBackup, p.Exe, true); exeState = ExeState(p); }
-            }
-            Log("  game exe: " + exeState + "   game pak: " + pakState);
-            if (exeState == "unknown" || pakState == "unknown" || pakState == "missing")
-                throw new SandboxFail("This Foxhole version is not one the patches know. Nothing was changed. If you changed the game files yourself, run Steam's 'Verify integrity of game files' and try again.");
-            // the state folder + record, written before any change (so a revert can always clean up)
-            Directory.CreateDirectory(p.Backup); Directory.CreateDirectory(p.Remote);
-            var info = rec0;
-            var moved = RecList(info, "MovedWin64Items");
-            var pre = info != null ? RecList(info, "PreExistingWin64Items") : Win64Items.Concat(Win64Generated).Where(i => Exists(p.Win64, i)).ToList();
-            string vSha = RecStr(info, "ExeVanillaSha"), pSha = RecStr(info, "ExePatchedSha");
-            int pv = info != null && RecStr(info, "ExePatcherVersion") != "" ? int.Parse(RecStr(info, "ExePatcherVersion")) : 1;
-            Action<string> record = status =>
-            {
-                var o = new Dictionary<string, object> { { "Status", status }, { "GameVersion", Patch.ContainsKey("game_version") ? Patch["game_version"] : "" },
-                    { "GameDir", p.Game }, { "InstalledAt", DateTime.Now.ToString("s") }, { "MovedWin64Items", moved.ToArray() }, { "PreExistingWin64Items", pre.ToArray() } };
-                if (vSha != "") { o["ExeVanillaSha"] = vSha; o["ExePatchedSha"] = pSha; }
-                o["ExePatcherVersion"] = pv;
-                SaveRecord(p, o);
-            };
-            record("installing");
-            // 1. the game exe (patch places found by signature)
-            if (exeState == "vanilla" || exeState == "vanilla-new")
-            {
-                Log("Backing up and patching the game exe...");
-                string orig = Sha256File(p.Exe);
-                CopyDurable(p.Exe, exeBackup);
-                if (!Same(Sha256File(exeBackup), orig)) throw new SandboxFail("Backup of the game exe failed verification.");
-                var bytes = File.ReadAllBytes(exeBackup);
-                string err = FhoExePatcher.Apply(bytes, PatcherHints(exeState == "vanilla"));
-                if (err != "") throw new SandboxFail("Could not patch the game exe: " + err + ". Nothing was changed.");
-                string nsha = Sha256Bytes(bytes);
-                if (exeState == "vanilla" && !PatchList("exe", "patched_sha256").Any(x => Same(x, nsha))) throw new SandboxFail("The patched exe is not the tested one. Nothing was changed.");
-                vSha = orig; pSha = nsha; pv = FhoExePatcher.Version;      // (R3: recorded first - a crash while writing still has a trusted backup)
-                RememberExeHashes(orig, nsha);                             // (review B: the app's own record - survives a deleted state folder)
-                record("installing");
-                File.WriteAllBytes(p.Exe, bytes);
-                if (!Same(Sha256File(p.Exe), nsha)) { File.Copy(exeBackup, p.Exe, true); throw new SandboxFail("Patched exe failed verification; the original was put back."); }
-                vSha = orig; pSha = nsha; pv = FhoExePatcher.Version;
-                record("installing");
-            }
-            // 2. DefaultEngine.ini inside the main pak (same size, patched in place; only those bytes are backed up)
-            string iniBackup = Path.Combine(p.Backup, "DefaultEngine.ini.vanilla");
-            if (pakState == "vanilla")
-            {
-                Log("Backing up and patching the network settings inside the game pak...");
-                var loc = FhoPakIni.Locate(p.Pak);
-                var vanilla = ReadRegion(p.Pak, loc[0], (int)loc[1]);
-                WriteAtomic(iniBackup, vanilla);
-                WriteRegion(p.Pak, loc[0], FhoPakIni.MakeOffline(vanilla));
-                if (PakState(p) != "patched") { WriteRegion(p.Pak, loc[0], vanilla); throw new SandboxFail("Patched pak failed verification; the original bytes were put back."); }
-            }
-            // 3. UE4SS + the client mods + FoxClient in Win64 (what was there before goes to the backup)
-            Log("Installing UE4SS and the client mods...");
-            Directory.CreateDirectory(bw);
-            // (review A2b) RECORDED FIRST, then moved: a crash between leaves "recorded, not moved" (Revert: the original is still in place -
-            // ticked off, never deleted), never "moved, not recorded". A backup is never overwritten.
-            foreach (var item in Win64Items)
-            {
-                if (!pre.Contains(item)) continue;                          // (not there before the sandbox: ours)
-                string src = Path.Combine(p.Win64, item), dst = Path.Combine(bw, item);
-                if (EntryExists(dst)) { if (!moved.Contains(item)) { moved.Add(item); record("installing"); } continue; }   // (already in the backup)
-                if (!EntryExists(src)) continue;
-                if (!moved.Contains(item)) { moved.Add(item); record("installing"); }
-                MoveEntry(src, dst);
-            }
-            foreach (var f in new[] { "dwmapi.dll", "UE4SS.dll", "UE4SS-settings.ini" }) File.Copy(Path.Combine(Payload, "ue4ss", f), Path.Combine(p.Win64, f), true);
-            File.WriteAllText(Path.Combine(p.Win64, "steam_appid.txt"), "505460", Encoding.ASCII);
-            CopyModFiles(p);
-            CopyFoxClient(p);
-            // 4. the server copy: hard links to the (patched) game files - no extra disk space
-            Log("Creating the local server copy (hard links, no extra disk space)...");
-            if (Directory.Exists(p.Server)) DeleteServerCopy(p.Server);
-            var skip = new[] { WIN64_REL + "\\", "War\\Content\\Paks\\", "War\\Saved\\" };
-            var files = new List<string>();
-            foreach (var top in new[] { "Engine", "War" })
-            {
-                string d = Path.Combine(p.Game, top);
-                if (!Directory.Exists(d)) continue;
-                foreach (var f in SafeFiles(d))
-                {
-                    string rel = f.Substring(p.Game.Length + 1);
-                    if (!skip.Any(s => rel.StartsWith(s, StringComparison.OrdinalIgnoreCase))) files.Add(f);
-                }
-            }
-            files.Add(p.Exe); files.Add(p.Pak);
-            foreach (var f in files)
-            {
-                string dst = Path.Combine(p.Server, f.Substring(p.Game.Length + 1));
-                Directory.CreateDirectory(Path.GetDirectoryName(dst));
-                if (!CreateHardLinkW(dst, f, IntPtr.Zero)) throw new SandboxFail("Could not create a hard link (the Foxhole drive must be NTFS): error " + Marshal.GetLastWin32Error());
-            }
-            ClearServerUe4ss(Path.Combine(p.Server, WIN64_REL));
-            record("installed");
-            Log("Set up for the offline sandbox.");
-        }
         // the server copy's links removed; a read-only flag (shared with the game's own file through the link) is put back on the game's file.
         // Every file is tried (a locked one does not stop the others); IOException at the end when any is left.
         static void DeleteServerCopy(string server)
@@ -518,282 +390,96 @@ namespace FoxholeModLauncher
             File.Delete(f);
             foreach (var o in others) try { File.SetAttributes(o, File.GetAttributes(o) | FileAttributes.ReadOnly); } catch { }
         }
-        static void CopyModFiles(SandboxPaths p)
+        // (restore) what the app sees of a 1.0.0 sandbox in this game -> null = nothing (the game's own files, or nothing the app can tell);
+        // else why, with restorable = whether Restore the game is the way back (false: a server kit of another app is set up in this game -
+        // never touched here). marker = the app's offline_session.json is there (a session that did not end).
+        public static string Trace(string game, bool marker, out bool restorable)
         {
-            File.Copy(Path.Combine(Payload, "ue4ss", "UE4SS-settings.ini"), Path.Combine(p.Win64, "UE4SS-settings.ini"), true);
-            string mods = Path.Combine(p.Win64, "Mods");
-            if (Directory.Exists(mods)) DeleteTree(mods);
-            CopyTree(Path.Combine(Payload, "Mods-client"), mods);
-            string remote = p.Remote.Replace("\\", "\\\\");
-            foreach (var lua in SafeFiles(mods).Where(x => x.EndsWith(".lua", StringComparison.OrdinalIgnoreCase)))
+            restorable = true;
+            SandboxPaths p;
+            try { p = PathsOf(game); } catch { restorable = false; return marker ? "an offline session of an earlier version did not end" : null; }
+            if (KitNotOurs(game)) { restorable = false; return "a server kit is set up in this game - use its \"Back to official Foxhole\", or run Steam's \"Verify integrity of game files\" for Foxhole and delete that _FoxholeOffline folder"; }
+            if (marker) return "an offline session of an earlier version did not end";
+            if (File.Exists(p.Info))
             {
-                string t = File.ReadAllText(lua);
-                if (t.Contains("@@REMOTE@@")) File.WriteAllText(lua, t.Replace("@@REMOTE@@", remote), new UTF8Encoding(false));
+                if (IsOurs(p)) return "the offline sandbox's changes are still in the game";
+                restorable = false;
+                return "a server kit is set up in this game - use its \"Back to official Foxhole\", or run Steam's \"Verify integrity of game files\" for Foxhole and delete that _FoxholeOffline folder";
             }
+            if (HasLeftovers(game)) return "files of the last offline sandbox wait to go back";
+            string block = LiveWarBlock(game);
+            if (block != null) return "the game files are still changed";
+            return null;
         }
-        static void CopyFoxClient(SandboxPaths p)
-        {
-            string src = Path.Combine(Payload, "FoxClient.dll");
-            if (!File.Exists(src)) return;
-            for (int i = 1; ; i++)
-            {
-                try { File.Copy(src, Path.Combine(p.Win64, "FoxClient.dll"), true); break; }
-                catch { if (i >= 15) throw; Thread.Sleep(1000); }
-            }
-        }
-        static void ClearServerUe4ss(string win64)
-        {
-            foreach (var item in new[] { "dwmapi.dll", "UE4SS.dll", "UE4SS-settings.ini", "Mods" }.Concat(Win64Generated))
-                foreach (var m in Matches(win64, item).ToList()) DeleteAny(m);
-            File.WriteAllText(Path.Combine(win64, "steam_appid.txt"), "505460", Encoding.ASCII);
-        }
-
-        const int GAME_PORT = 7777, BEACON_PORT = 15000;
-        const string PROXY_NAME = "X3DAudio1_7.dll";
-        static string AppDir { get { return AppDomain.CurrentDomain.BaseDirectory; } }
-        static void WriteAscii(string path, string text) { File.WriteAllText(path, text, new ASCIIEncoding()); }   // (no BOM, no newline added)
-        static bool FileHas(string path, string text)
+        public static bool KitNotOurs(string game)
         {
             try
             {
-                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-                using (var r = new StreamReader(fs)) return r.ReadToEnd().Contains(text);
+                var p = PathsOf(game);
+                if (!File.Exists(p.Info) || IsOurs(p)) return false;
+                var rec = Record(p);
+                return !(RecStr(rec, "Status") == "installing" && CutOffSandboxSetup(p, rec));
             }
             catch { return false; }
         }
-        static bool WaitFor(Func<bool> cond, int seconds, Process mustLive)
-        {
-            for (int i = 0; i < seconds * 2; i++)
-            {
-                if (cond()) return true;
-                if (mustLive != null && mustLive.HasExited) return false;
-                Thread.Sleep(500);
-            }
-            return cond();
-        }
-        static string NewSecret(int n)
-        {
-            const string chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-            var b = new byte[n];
-            using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(b);
-            var sb = new StringBuilder();
-            foreach (var x in b) sb.Append(chars[x % chars.Length]);
-            return sb.ToString();
-        }
-        [StructLayout(LayoutKind.Sequential)] struct BY_HANDLE_FILE_INFORMATION { public uint Attr, CLo, CHi, ALo, AHi, WLo, WHi, Vol, SizeHi, SizeLo, Links, IdxHi, IdxLo; }   // (FILETIMEs = 2 x DWORD: 4-byte aligned)
-        [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetFileInformationByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle h, out BY_HANDLE_FILE_INFORMATION i);
-        static uint LinkCount(string path)
-        {
-            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-            { BY_HANDLE_FILE_INFORMATION i; return GetFileInformationByHandle(fs.SafeFileHandle, out i) ? i.Links : 0; }
-        }
-        static void PlaceOwnFile(string src, string dst, SandboxPaths p)
-        {
-            string full = Path.GetFullPath(dst);
-            if (!full.StartsWith(p.State + "\\", StringComparison.OrdinalIgnoreCase)) throw new SandboxFail("refused to write outside the sandbox folder: " + dst);
-            Directory.CreateDirectory(Path.GetDirectoryName(full));
-            if (File.Exists(full)) { File.SetAttributes(full, FileAttributes.Normal); File.Delete(full); }   // (our own file - never a game link here)
-            File.Copy(src, full);
-            if (LinkCount(full) != 1) throw new SandboxFail("unexpected hard link at " + full);
-        }
-
-        static string AddressCacheName(string exe)
+        static bool CutOffSandboxSetup(SandboxPaths p, Dictionary<string, object> rec)
         {
             try
             {
-                var h = new byte[4096];
-                using (var f = new FileStream(exe, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) f.Read(h, 0, h.Length);
-                int nt = BitConverter.ToInt32(h, 0x3c);
-                if (nt < 0 || nt + 0x18 + 0x3c > h.Length) return "";
-                return string.Format("addresses-{0:x8}-{1:x8}.txt", BitConverter.ToUInt32(h, nt + 8), BitConverter.ToUInt32(h, nt + 0x18 + 0x38));
+                string mk = Path.Combine(Launcher.AppDataPath, "offline_session.json");
+                if (!File.Exists(mk) || new FileInfo(mk).Length > 64 * 1024) return false;
+                var m = new JavaScriptSerializer().DeserializeObject(File.ReadAllText(mk)) as Dictionary<string, object>;
+                if (m == null) return false;
+                string g = RecStr(m, "game"), kind = RecStr(m, "kind");
+                if (g == "" || kind != "" || !Same(Path.GetFullPath(g).TrimEnd('\\'), p.Game)) return false;
+                DateTime started, at;
+                var ci = System.Globalization.CultureInfo.InvariantCulture;
+                if (!DateTime.TryParseExact(RecStr(m, "started"), "yyyy-MM-dd HH:mm:ss", ci, System.Globalization.DateTimeStyles.None, out started)) return false;
+                if (!DateTime.TryParseExact(RecStr(rec, "InstalledAt"), "s", ci, System.Globalization.DateTimeStyles.None, out at)) return false;
+                double s = (at - started).TotalSeconds;
+                return s >= -60 && s <= 20 * 60;
             }
-            catch { return ""; }
+            catch { return false; }
         }
-        // (2026-11-18 review) the game also loads .pak files from %LOCALAPPDATA%\Foxhole\Saved\Paks - outside the game folder, so the sandbox
-        // cannot set them aside (it never moves the player's files outside the game folder): a sandbox start is refused while any is there
-        // (a link there too - its target is never read). -> null = nothing there, else the message for the player.
-        public static string SavedPaksProblem()
+        // (review of 5db297e8, 1 - the second guard) what a SERVER KIT keeps in its state folder and a sandbox restore never deletes: world
+        // saves (remote\world with anything in it), server instances (inst\), world backups (backups\) -> their names in the state folder
+        static List<string> KeptKitData(SandboxPaths p)
         {
-            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Foxhole", "Saved", "Paks");
+            var r = new List<string>();
             try
             {
-                if (!EntryExists(dir)) return null;
-                var found = new List<string>();
-                if (IsLink(dir) || !IsDir(dir)) found.Add("Paks itself is a link or a file");
-                else
-                {
-                    found.AddRange(LinkEntries(dir).Select(x => x.Substring(dir.Length + 1) + " (a link)"));
-                    found.AddRange(SafeFiles(dir).Where(f => f.EndsWith(".pak", StringComparison.OrdinalIgnoreCase)).Select(f => f.Substring(dir.Length + 1)));
-                }
-                if (found.Count == 0) return null;
-                return "Foxhole's own mod folder " + dir + " holds " + found.Count + " pak file(s) or link(s) (" + string.Join(", ", found.Take(5)) + (found.Count > 5 ? ", ..." : "") +
-                       "). The game would load them in the sandbox too, and the app does not move files outside the game folder - move them out of " +
-                       "that folder yourself, then start the sandbox again. Nothing was changed.";
+                string w = Path.Combine(p.Remote, "world");
+                if (EntryExists(w) && (IsLink(w) || !IsDir(w) || Directory.GetFileSystemEntries(w).Length > 0)) r.Add("remote");
             }
-            catch (Exception ex) { return "Could not check " + dir + " (" + ex.Message + ") - nothing was changed."; }
+            catch { r.Add("remote"); }
+            foreach (var n in new[] { "inst", "backups" }) if (EntryExists(Path.Combine(p.State, n))) r.Add(n);
+            return r;
         }
-        // the whole start: server copy refreshed, the server started (FoxServer through the stand-in X3DAudio1_7.dll), the player's game
-        // started and connected. Returns the player's game process.
-        public static Process Play(string game, string map, string faction)
+        public static bool IsOurs(SandboxPaths p)
         {
+            string rc = Path.Combine(p.Win64, "Mods", "RemoteConsole", "Scripts", "main.lua");
+            try { if (File.Exists(rc) && !IsLink(rc) && new FileInfo(rc).Length < 1 << 20 && File.ReadAllText(rc).Contains("loaded (sandbox)")) return true; } catch { }
+            return false;
+        }
+        public static int StopServerCopy(string game)
+        {
+            if (KitNotOurs(game)) return 0;                                // (a server kit's server is never ours to stop - review A)
             var p = PathsOf(game);
-            if (!File.Exists(p.Info) || RecStr(Record(p), "Status") != "installed") throw new SandboxFail("The sandbox is not set up in this game yet.");
-            if (!System.Text.RegularExpressions.Regex.IsMatch(map, "^[A-Za-z0-9_]{1,64}$")) throw new SandboxFail("bad map name");
-            if (faction != "0" && faction != "1") faction = "1";
-            string saved = SavedPaksProblem();
-            if (saved != null) throw new SandboxFail(saved);
-            if (GameProcesses(game).Count > 0) Stop(game);                 // (a sandbox left from a crash)
-            string sWin64 = Path.Combine(p.Server, WIN64_REL);
-            if (!File.Exists(Path.Combine(sWin64, EXE_NAME))) throw new SandboxFail("The sandbox's server copy is missing - set it up again (Restore the game, then Play offline).");
-            // Steam first (the game needs it running and signed in; admins.txt reads its signed-in account)
-            if (Process.GetProcessesByName("steam").Length == 0)
+            string root = p.Server + "\\";
+            int n = 0;
+            foreach (var pr in GameProcesses(game))
             {
-                Log("Starting Steam (Foxhole needs it running)...");
-                try { Process.Start(new ProcessStartInfo("steam://open/main") { UseShellExecute = true }); } catch { }
-                for (int i = 0; i < 45 && Process.GetProcessesByName("steamwebhelper").Length == 0; i++) Thread.Sleep(2000);
-                Thread.Sleep(10000);
-            }
-            ClearServerUe4ss(sWin64);
-            CopyModFiles(p);
-            CopyFoxClient(p);
-            SetAsideModContent(p);
-            ScrubServerPaks(p);
-            Directory.CreateDirectory(p.Remote); Directory.CreateDirectory(p.Fox);
-            foreach (var n in new[] { "server_cmd.txt", "cmd.txt", "cmd_client.txt", "foxserver_ready.txt", "foxserver_spawn.txt", "merge_ready.txt", "layout_done.txt", "compat_paks.txt", "merge.txt" })
-                if (File.Exists(Path.Combine(p.Remote, n))) File.Delete(Path.Combine(p.Remote, n));
-            foreach (var f in Directory.GetFiles(p.Remote, "mapdata_*_*.txt")) File.Delete(f);
-            WriteAscii(Path.Combine(p.Remote, "session.txt"), "faction=" + faction + "\nmap=" + map + "\ndeploy_on_join=0");   // (no backend: spawned at once)
-            try { File.AppendAllText(Path.Combine(p.Remote, "server_out.txt"), "\r\n==== " + DateTime.Now.ToString("s") + " new session: " + map + ", offline sandbox\r\n", new ASCIIEncoding()); } catch { }
-            WriteAscii(Path.Combine(p.Remote, "join_host.txt"), "127.0.0.1:" + GAME_PORT);
-            WriteAscii(Path.Combine(p.Remote, "instances.txt"), map + " " + GAME_PORT + " " + BEACON_PORT + " " + p.Remote);
-            string admins = Path.Combine(p.Remote, "admins.txt");
-            bool named = File.Exists(admins) && File.ReadAllLines(admins).Any(l => System.Text.RegularExpressions.Regex.IsMatch(l, @"^\s*\d{17}\s*$"));
-            if (!named)
-            {
-                var lines = File.Exists(admins) ? File.ReadAllLines(admins).ToList() : new List<string> { "# SteamID64 of each server admin, one per line" };
                 try
                 {
-                    using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam\ActiveProcess"))
-                    {
-                        object v = k != null ? k.GetValue("ActiveUser") : null;
-                        long acc; if (v != null && long.TryParse(v.ToString(), out acc) && acc > 0) lines.Add((76561197960265728L + acc).ToString());
-                    }
+                    string img = ImagePath(pr.Id);
+                    if (img != "" && Path.GetFullPath(img).StartsWith(root, StringComparison.OrdinalIgnoreCase)) { pr.Kill(); pr.WaitForExit(15000); n++; }
                 }
                 catch { }
-                File.WriteAllText(admins, string.Join("\r\n", lines) + "\r\n", new ASCIIEncoding());
-            }
-            foreach (var s in new[] { new KeyValuePair<string, int>("server_password.txt", 20), new KeyValuePair<string, int>("admin_key.txt", 32) })
-            {
-                string f = Path.Combine(p.Remote, s.Key);
-                if (!File.Exists(f) || File.ReadAllText(f).Trim() == "") WriteAscii(f, NewSecret(s.Value));
-                File.Copy(f, Path.Combine(p.Win64, s.Key), true);
-            }
-            // FoxServer's address cache for this game build (else a 27 s scan that a headless start does not survive)
-            string cache = Path.Combine(Payload, "server_cache");
-            if (Directory.Exists(cache))
-                foreach (var f in Directory.GetFiles(cache, "addresses-*.txt"))
-                { string d = Path.Combine(p.Fox, Path.GetFileName(f)); if (!File.Exists(d)) File.Copy(f, d); }
-            // FoxServer.dll + the stand-in that loads it (both our own files; the stand-in only in the server copy)
-            string fs = Path.Combine(AppDir, "FoxServer", "bin", "sandbox", "FoxServer.dll"), px = Path.Combine(AppDir, "FoxServer", "bin", "sandbox", PROXY_NAME);
-            if (!File.Exists(fs) || !File.Exists(px)) throw new SandboxFail("The sandbox server files are missing from this app's folder (FoxServer).");
-            try { PlaceOwnFile(fs, Path.Combine(p.Fox, "FoxServer.dll"), p); } catch (IOException) { throw new SandboxFail("A sandbox server is still running - close it first."); }
-            PlaceOwnFile(px, Path.Combine(sWin64, PROXY_NAME), p);
-            // (2026-11-18) a game build without FoxServer's address cache (a Steam update after this release): its 27 s signature scan does
-            // not survive a headless start - this first start draws a small server window instead; FoxServer writes the cache, later
-            // starts are headless again
-            string cacheName = AddressCacheName(Path.Combine(sWin64, EXE_NAME));
-            bool headless = cacheName == "" || File.Exists(Path.Combine(p.Fox, cacheName));
-            if (!headless) Log("  a new game build: this first start shows a small server window (it learns the new build once)");
-            string mapPath = map.StartsWith("HomeRegion") ? "/Game/Maps/" + map : "/Game/Maps/Master/" + map;
-            string bootFile = Path.Combine(p.Remote, "foxserver_boot.txt"), goFile = Path.Combine(p.Remote, "foxserver_go.txt");
-            Process srv = null;
-            if (System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveUdpListeners().Any(e => e.Port == GAME_PORT))
-                throw new SandboxFail("Port " + GAME_PORT + " is in use by another program (another Foxhole server?) - close it first.");
-            Log("Starting the " + map + " server... (about a minute)");
-            for (int attempt = 1; attempt <= 3; attempt++)
-            {
-                if (File.Exists(bootFile)) File.Delete(bootFile);           // (before the start: FoxServer watches for the go file at once)
-                if (File.Exists(goFile)) File.Delete(goFile);
-                DateTime t0 = DateTime.Now;
-                string srvLog = Path.Combine(p.Remote, "server_war-" + t0.ToString("MMdd-HHmmss") + ".log");
-                string args = "-log \"-ABSLOG=" + srvLog + "\" -nosound -windowed -ResX=640 -ResY=360 \"-ExecCmds=t.MaxFPS " + (headless ? 60 : 30) + "\" -port=" + GAME_PORT +
-                              " -BeaconPort=" + BEACON_PORT + (headless ? " -nullrhi" : "") + " -multihome=127.0.0.1";
-                srv = Process.Start(new ProcessStartInfo(Path.Combine(sWin64, EXE_NAME), args) { UseShellExecute = true, WorkingDirectory = sWin64, WindowStyle = ProcessWindowStyle.Minimized });
-                bool menu = WaitFor(() => File.Exists(srvLog) && File.GetLastWriteTime(srvLog) > t0 && FileHas(srvLog, "DisconnectWarServiceExternal"), 240, srv);
-                if (menu) { Thread.Sleep(5000); if (!srv.HasExited) break; }
-                if (!menu && !srv.HasExited) { try { srv.Kill(); } catch { } throw new SandboxFail("Timed out after 240 s waiting for the " + map + " server to reach its main menu."); }
-                if (attempt == 3) throw new SandboxFail("The " + map + " server closed 3 times while starting (crash files: %LOCALAPPDATA%\\Foxhole\\Saved\\Crashes).");
-                Log("  the server closed while starting (attempt " + attempt + " of 3); trying again...");
-                Thread.Sleep(3000);
-            }
-            WriteAscii(goFile, "go");
-            if (!WaitFor(() => File.Exists(bootFile), 120, srv)) { Stop(game); throw new SandboxFail("FoxServer did not prepare the server (no foxserver_boot.txt)."); }
-            string boot = File.ReadAllText(bootFile).Trim();
-            if (boot != "ok") { Stop(game); throw new SandboxFail("FoxServer could not prepare the server (" + boot + "). This game build may not be supported yet."); }
-            WriteAscii(Path.Combine(p.Remote, "cmd.txt"), "open " + mapPath + "?listen");
-            Func<bool> listening = () => System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveUdpListeners().Any(e => e.Port == GAME_PORT);
-            if (!WaitFor(listening, 240, srv)) { Stop(game); throw new SandboxFail("The " + map + " server did not open the map."); }
-            Log(map + " server is up (this PC only).");
-            // the player's game: to its main menu (UE4SS's console line), then connected
-            Process cli = null;
-            string ue4ssLog = Path.Combine(p.Win64, "UE4SS.log");
-            string gameLog = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Foxhole", "Saved", "Logs", "War.log");
-            for (int attempt = 1; attempt <= 3; attempt++)
-            {
-                DateTime t1 = DateTime.Now;
-                cli = Process.Start(new ProcessStartInfo(p.Exe, "-log") { UseShellExecute = true, WorkingDirectory = p.Win64 });   // (no handles of ours inherited)
-                Log("Starting your game...");
-                bool ready = false, stuck = false; long lastLen = -1, lastMem = 0; DateTime lastGrow = DateTime.Now;
-                for (int i = 0; i < 300 && !ready; i++)
-                {
-                    Thread.Sleep(2000);
-                    if (cli.HasExited) break;
-                    ready = File.Exists(ue4ssLog) && File.GetLastWriteTime(ue4ssLog) > t1 && FileHas(ue4ssLog, "ConsoleKey[1]");
-                    long len = File.Exists(gameLog) ? new FileInfo(gameLog).Length : 0;
-                    cli.Refresh(); long mem = cli.WorkingSet64;
-                    if (len != lastLen || Math.Abs(mem - lastMem) > 8L << 20) { lastLen = len; lastMem = mem; lastGrow = DateTime.Now; }
-                    else if (!ready && (DateTime.Now - lastGrow).TotalSeconds > 240) { stuck = true; break; }
-                }
-                if (ready) { Thread.Sleep(3000); break; }
-                if (!cli.HasExited) { try { cli.Kill(); } catch { } }
-                if (attempt == 3) { Stop(game); throw new SandboxFail(stuck ? "Your game stopped loading - try again." : "Your game closed while starting."); }
-                Log("  your game did not reach its menu (attempt " + attempt + " of 3); trying again...");
-            }
-            WriteAscii(Path.Combine(p.Remote, "cmd_client.txt"), "open 127.0.0.1:" + GAME_PORT + "?FactionId=" + faction);
-            Log("Connecting to your sandbox - you are spawned in a few seconds.");
-            return cli;
-        }
-
-        public static int Stop(string game)
-        {
-            // (a killed game can start its crash reporter a moment later: rounds until nothing of this folder is left, up to ~30 s)
-            int n = 0;
-            for (int round = 0; round < 6; round++)
-            {
-                int k = StopOnce(game);
-                n += k;
-                if (k == 0) { Thread.Sleep(1500); if (GameProcesses(game).Count == 0) break; }
+                pr.Dispose();
             }
             return n;
         }
-        static int StopOnce(string game)
-        {
-            var list = GameProcesses(game);
-            foreach (var pr in list)                                      // (FoxServer writes its journals first - its drain event)
-            {
-                try
-                {
-                    using (var ask = EventWaitHandle.OpenExisting("Local\\FoxServerDrain-" + pr.Id))
-                    using (var done = EventWaitHandle.OpenExisting("Local\\FoxServerDrained-" + pr.Id)) { ask.Set(); done.WaitOne(5000); }
-                }
-                catch { }
-            }
-            foreach (var pr in list) { try { pr.Kill(); } catch { } }
-            for (int i = 0; i < 60 && list.Any(x => { try { return !x.HasExited; } catch { return false; } }); i++) Thread.Sleep(500);
-            Thread.Sleep(1000);
-            foreach (var pr in list) pr.Dispose();
-            return list.Count;
-        }
+
 
         static void Refusals(SandboxPaths p, string verb)
         {
@@ -818,6 +504,9 @@ namespace FoxholeModLauncher
         {
             var p = PathsOf(game);
             if (!File.Exists(p.Exe)) throw new SandboxFail("Not a Foxhole folder: " + game);
+            if (KitNotOurs(game)) throw new SandboxFail("A server kit is set up in this game (its install record, without the sandbox's files) - the app " +
+                "leaves it alone. Nothing was changed. Use the kit's \"Back to official Foxhole\", or run Steam's \"Verify integrity of game files\" " +
+                "for Foxhole and delete that _FoxholeOffline folder.");     // (review A: before anything is stopped or read for a restore)
             if (GameProcesses(game).Count > 0) throw new SandboxFail("Foxhole is running. Close it first.");
             Refusals(p, "restore");
             var info = Record(p);
@@ -826,10 +515,13 @@ namespace FoxholeModLauncher
             // 1. the game exe (the server copy's exe is a hard link of it: it gets the original bytes too, and goes in step 5)
             string exeState = ExeState(p), exeBackup = Path.Combine(p.Backup, EXE_NAME);
             string bsha = File.Exists(exeBackup) ? Sha256File(exeBackup) : "";
-            bool backupOk = bsha != "" && (Same(bsha, PatchStr("exe", "vanilla_sha256")) || (info != null && Same(bsha, RecStr(info, "ExeVanillaSha"))));
-            if ((exeState == "unknown" || exeState == "patched") && backupOk) { Log("Restoring the original game exe..."); File.Copy(exeBackup, p.Exe, true); exeState = ExeState(p); }
+            bool backupOk = bsha != "" && (Same(bsha, PatchStr("exe", "vanilla_sha256")) || (info != null && Same(bsha, RecStr(info, "ExeVanillaSha"))) ||
+                                           PatchList("exe", "known_vanilla_sha256").Any(x => Same(x, bsha)));
+            bool putBack = exeState == "patched";
+            if (putBack && backupOk) { Log("Restoring the original game exe..."); File.Copy(exeBackup, p.Exe, true); exeState = ExeState(p); }
             else if (exeState == "patched") problems.Add("no usable backup of the game exe - use Steam's 'Verify integrity of game files'");
-            if (exeState != "vanilla" && exeState != "vanilla-new") problems.Add("game exe is '" + exeState + "'");
+            if (exeState == "unknown") Log("  the game exe is not one this app knows (a Steam update?) - left as it is; if Foxhole does not start, Steam's 'Verify integrity of game files' repairs it");
+            else if (exeState != "vanilla" && exeState != "vanilla-new") problems.Add("game exe is '" + exeState + "'");
             // 2. DefaultEngine.ini inside the pak. (review C1) restored whenever the backup is valid and the region differs from it in a way only
             // this app's write explains (every byte = the backup's or the offline version's): a torn write reads 'unknown' or even 'vanilla' -
             // a pak Steam replaced since (other settings) is left alone
@@ -924,18 +616,36 @@ namespace FoxholeModLauncher
                                       (serverLeft != "" ? " (The local server copy is not fully removed either - Restore tries again.)" : ""));
             // (review C3) one text for the return value, sandbox_leftovers.txt and HasLeftovers: what is really still there
             string note = LeftoverText(game, reasons, win64Held, serverLeft);
+            // (review of 5db297e8, 1 - second guard) world saves, server instances or world backups in the state folder are never deleted:
+            // the folder stays with them (only the rest of the sandbox's files go) and the restore says so
+            var kept = KeptKitData(p);
+            string keptText = kept.Count == 0 ? "" : "Left as they are in " + p.State + ": " + string.Join(", ", kept.Select(k => k == "remote" ? "remote\\world (world saves)" :
+                k == "inst" ? "inst (server instances)" : "backups (world backups)")) + " - a server's data, never deleted by the app; delete that folder yourself if you do not need it.";
             if (note == "" && !Win64BackupLeft(p))                          // (review A2c: never while backup\Win64 holds anything)
             {
-                if (Directory.Exists(p.State)) DeleteTree(p.State);
+                if (kept.Count == 0)
+                {
+                    if (Directory.Exists(p.State)) DeleteTree(p.State);
+                    Log("Foxhole is back to its original files.");
+                    return "";
+                }
+                if (File.Exists(p.Info)) File.Delete(p.Info);
+                foreach (var e in Directory.GetFileSystemEntries(p.State))
+                {
+                    string n = Path.GetFileName(e);
+                    if (kept.Any(x => Same(x, n))) continue;
+                    try { DeleteAny(e); } catch (Exception ex) { Log("  could not remove " + n + " from the sandbox folder (" + ex.Message + ")"); }
+                }
                 Log("Foxhole is back to its original files.");
-                return "";
+                Log("  " + keptText);
+                return keptText;
             }
             // the game is original - the record goes, only the leftovers stay (their own folders + the note)
             if (File.Exists(p.Info)) File.Delete(p.Info);
             foreach (var e in Directory.GetFileSystemEntries(p.State))
             {
                 string n = Path.GetFileName(e);
-                if (Stores.Any(x => Same(x, n)) || Same(n, "server") || Same(n, LEFTOVER_NOTE)) continue;
+                if (Stores.Any(x => Same(x, n)) || Same(n, "server") || Same(n, LEFTOVER_NOTE) || kept.Any(x => Same(x, n))) continue;
                 try
                 {
                     if (Same(n, "backup") && !IsLink(e) && IsDir(e) && Win64BackupLeft(p))       // (the backup's other files go, backup\Win64 stays)
@@ -948,6 +658,7 @@ namespace FoxholeModLauncher
                 catch (Exception ex) { Log("  could not remove " + n + " from the sandbox folder (" + ex.Message + ")"); }
             }
             if (note == "") note = LeftoverText(game, reasons, win64Held, serverLeft);
+            if (keptText != "") note = (note + " " + keptText).Trim();
             try
             {
                 File.WriteAllText(Path.Combine(p.State, LEFTOVER_NOTE), "Left over from the offline sandbox of Foxhole Mod Manager (" + DateTime.Now.ToString("s") + ").\r\n" +
@@ -1049,23 +760,6 @@ namespace FoxholeModLauncher
             finally { FindClose(h); }
             return r;
         }
-        static readonly string[] KitModPakFiles = { "War-WindowsNoEditor_1_P.pak", "War-WindowsNoEditor_1_P.txt", "War-WindowsNoEditor_1_P.pak.kit",
-                                                    "War-WindowsNoEditor_1_P.pak.stamp", "War-WindowsNoEditor_1_P.pak.sha256" };
-        static bool AddsContent(string pak)
-        {
-            try
-            {
-                string mount; int v;
-                foreach (var f in Launcher.PakPaths(pak, out mount, out v))
-                {
-                    string full = "/" + (mount + "/" + f).Replace('\\', '/');
-                    while (full.Contains("//")) full = full.Replace("//", "/");
-                    if (full.IndexOf("/Content/Mods/", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-                }
-                return false;
-            }
-            catch { return true; }                                         // (R6: unreadable = not trusted: set aside)
-        }
         // (2026-11-18 review) links: a pak (or a folder of paks) that is a symbolic link / junction is never followed or read - the game would
         // follow it, so the LINK ITSELF is set aside (moved on the same volume: its target is not touched) and put back by the restore
         static bool IsLink(string path) { return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0; }
@@ -1085,53 +779,6 @@ namespace FoxholeModLauncher
         static void MoveEntry(string from, string to)
         {
             if ((File.GetAttributes(from) & FileAttributes.Directory) != 0) Directory.Move(from, to); else File.Move(from, to);
-        }
-        static void SetAsideModContent(SandboxPaths p)
-        {
-            string paks = Path.Combine(p.Game, "War", "Content", "Paks"), store = Path.Combine(p.State, "content_aside");
-            if (!Directory.Exists(paks)) return;
-            if (IsLink(paks)) throw new SandboxFail("The game's War\\Content\\Paks folder is a link to another folder - the sandbox cannot check what it holds. Nothing was started.");
-            var move = new List<string>();
-            foreach (var l in LinkEntries(paks))
-            {
-                if (Same(Path.GetFullPath(l), Path.GetFullPath(p.Pak))) throw new SandboxFail("The game pak is a link to another file - the sandbox cannot run on it. Nothing was started.");
-                move.Add(l);
-            }
-            foreach (var f in SafeFiles(paks))
-            {
-                string name = Path.GetFileName(f);
-                if (Same(Path.GetFullPath(f), p.Pak)) continue;            // (the base game pak itself - by its full path, not by name at any depth)
-                if (KitModPakFiles.Any(k => Same(k, name))) { move.Add(f); continue; }
-                if (f.EndsWith(".pak", StringComparison.OrdinalIgnoreCase) && AddsContent(f))
-                {
-                    move.Add(f);
-                    foreach (var ext in new[] { ".sig", ".utoc", ".ucas" })      // (its companions)
-                    { string c = Path.ChangeExtension(f, ext); if (File.Exists(c)) move.Add(c); }
-                }
-            }
-            move = move.Distinct().ToList();
-            if (move.Count == 0) return;
-            // (2026-11-18 review) the store only ever receives: anything already at a destination (a held file of an earlier session, a folder,
-            // a link - also a dangling one) is the PLAYER's - never deleted or overwritten; a link or file in the store's folder chain refuses too.
-            // Checked for every entry BEFORE the first move.
-            if (EntryExists(store) && (IsLink(store) || !IsDir(store)))
-                throw new SandboxFail("The sandbox's " + store + " is not a plain folder - nothing was started. Restore the game, then try again.");
-            foreach (var f in move)
-            {
-                string rel = f.Substring(paks.Length + 1), dst = Path.Combine(store, rel);
-                if (EntryExists(dst) || (EntryExists(store) && !PlainParents(store, dst)))
-                    throw new SandboxFail("Your mod file " + rel + " cannot be set aside: " + store + " already holds one of that name from an earlier session. " +
-                                          "Press Restore the game (or sort out that folder yourself), then start the sandbox again. Nothing was started.");
-            }
-            foreach (var f in move)
-            {
-                string rel = f.Substring(paks.Length + 1), dst = Path.Combine(store, rel);
-                Directory.CreateDirectory(Path.GetDirectoryName(dst));
-                if (!PlainParents(store, dst)) throw new SandboxFail("The sandbox's " + store + " changed while setting files aside - nothing more was moved.");
-                MoveEntry(f, dst);
-                File.AppendAllText(Path.Combine(store, "aside.txt"), DateTime.Now.ToString("s") + "  " + rel + "\r\n", new ASCIIEncoding());
-                Log("  set aside for the sandbox (added content): " + rel);
-            }
         }
         // the player's files in a store put back into War\Content\Paks -> the ones still waiting there (relative path + why). Never follows a
         // link (links go back AS links), never deletes or overwrites anything in the game: a destination that exists in any form (a file, a
@@ -1179,34 +826,6 @@ namespace FoxholeModLauncher
                 if (tryMove(f, rel)) Log("  put back: " + rel);
             }
             if (!LinkEntries(store).Any() && !SafeFiles(store).Any(f => !Same(f.Substring(store.Length + 1), note))) try { DeleteTree(store); } catch { }
-        }
-        // (2026-11-18 review) the sandbox's SERVER copy loads the base game pak only: anything else in its pak folders (an extra pak, a link, a
-        // folder) is removed from the copy - only the copy's own entry (a hard link's name, or the link itself; never a link's target)
-        static void ScrubServerPaks(SandboxPaths p)
-        {
-            string basePak = Path.GetFullPath(Path.Combine(p.Server, p.Pak.Substring(p.Game.Length + 1)));
-            foreach (var rel in new[] { "War\\Content\\Paks", "Engine\\Content\\Paks", "War\\Saved\\Paks" })
-            {
-                string d = Path.Combine(p.Server, rel);
-                if (!EntryExists(d)) continue;
-                if (IsLink(d)) throw new SandboxFail("The sandbox's server copy is damaged (" + rel + " is a link) - set it up again (Restore the game, then Play offline).");
-                if (!IsDir(d))                                             // (a plain file where the folder belongs: only that name of the copy)
-                {
-                    RemoveCopyFile(d);
-                    Log("  removed from the sandbox server copy: " + rel + " (a file)");
-                    continue;
-                }
-                foreach (var e in Directory.GetFileSystemEntries(d))
-                {
-                    bool link = IsLink(e), dir = IsDir(e), isBase = Same(Path.GetFullPath(e), basePak);
-                    if (isBase && !link && !dir) continue;
-                    if (isBase) throw new SandboxFail("The sandbox's server copy is damaged (its game pak is a link) - set it up again (Restore the game, then Play offline).");
-                    if (link) { if (dir) Directory.Delete(e, false); else File.Delete(e); }
-                    else if (dir) DeleteServerCopy(e);
-                    else RemoveCopyFile(e);                                // (a hard link: a read-only flag is shared with the other names - put back)
-                    Log("  removed from the sandbox server copy: " + rel + "\\" + Path.GetFileName(e));
-                }
-            }
         }
     }
 }

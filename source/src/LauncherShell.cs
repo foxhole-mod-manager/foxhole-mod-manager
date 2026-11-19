@@ -270,15 +270,18 @@ namespace FoxholeModLauncher
                 y += 44;
             }
             // the game's state + the way back to the original game
-            var gc = new Rectangle(12, H - 172, SIDE - 24, 112);
+            // (no sandbox in this build) the card shows Restore only while something of a 1.0.0 sandbox is in the game (RefreshTrace)
+            bool restoreShown = markerOn || offlineBusy || (gameTrace != null && gameTraceRestorable);
+            var gc = restoreShown ? new Rectangle(12, H - 172, SIDE - 24, 112) : new Rectangle(12, H - 132, SIDE - 24, 72);
             Fill(g, gc, CSurf, 10); Edge(g, gc, CLine, 10);
             Txt(g, "Your Foxhole", 12, false, CMuted, new Rectangle(gc.X + 14, gc.Y + 10, 160, 18), DT_LEFT | DT_SINGLELINE, 0, false);
-            bool changed = markerOn;
-            string st = PublicEdition ? (changed ? "Changed - sandbox running" : "Original - online ready") : sideText;
+            bool changed = restoreShown || gameTrace != null;
+            string st = offlineBusy ? "Restoring..." : !changed ? "Original - online ready" : restoreShown ? "Changed - press Restore" : "Changed - a server kit";
             Color dot = PublicEdition ? (changed ? CWarn : CGood) : sideKind == 1 ? CGood : sideKind == 2 ? CWarn : sideKind == 3 ? CBad : CAccent;
             Fill(g, new Rectangle(gc.X + 14, gc.Y + 37, 8, 8), dot, 4);
             Txt(g, st, 13, true, CText, new Rectangle(gc.X + 28, gc.Y + 30, gc.Width - 36, 22), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, 0, false);
-            Btn(g, "restore", "Restore the game", new Rectangle(gc.X + 12, gc.Y + 64, gc.Width - 24, 34), 1, buttonsOn);
+            if (restoreShown) Btn(g, "restore", "Restore the game", new Rectangle(gc.X + 12, gc.Y + 64, gc.Width - 24, 34), 1, buttonsOn);
+            else hits.Remove("restore");
             Txt(g, "Fan-made. Not affiliated with Siege Camp.", 11, false, CFaint, new Rectangle(20, H - 50, SIDE - 32, 36), DT_LEFT | DT_WORDBREAK, 0, false);
         }
         // (private) the sidebar's game state, set where the update / setup / join / revert end (Launcher.cs): 0 working, 1 good, 2 warning, 3 failed
@@ -303,9 +306,7 @@ namespace FoxholeModLauncher
             if (page == "browse") DrawBrowseHeader(g);
             else TxtH(g, title, 24, CText, new Rectangle(CX, 0, 400, HDR), DT_LEFT | DT_VCENTER | DT_SINGLELINE, 1);
             // the primary action, on every page
-            var pr = new Rectangle(W - 100 - 176, 10, 172, 40);
-            if (PublicEdition) PlaySplit(g, "hdr:", new Rectangle(W - 100 - 226, 10, 222, 40));
-            else Btn(g, "hdr:play", buttonsOn ? "PLAY" : "BUSY...", pr, 0, buttonsOn, buttonsOn ? "play" : null);
+            PlayPill(g, "hdr:", new Rectangle(W - 100 - 176, 10, 172, 40));
             // window buttons
             foreach (var id in new[] { "min", "close" })
             {
@@ -338,106 +339,41 @@ namespace FoxholeModLauncher
             Txt(g, right, 12, false, CFaint, new Rectangle(CR - rw, r.Y, rw, r.Height), DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, 1, false);
         }
 
-        bool PlayOffline() { return PublicEdition && (offlineBusy || Str(Options(), "play_mode") == "offline"); }
-        // ONE pill: the play part, and at its right end a smaller part of the same pill (thin divider, chevron) that opens the mode list
-        void PlaySplit(Graphics g, string pre, Rectangle r)
+        // ---------------------------------------------------------------------------------------------------- home
+        // (no sandbox in this build) PLAY = the live war: one plain pill (the click id stays "offline" - LauncherUi.cs Click_)
+        void PlayPill(Graphics g, string pre, Rectangle r)
         {
-            bool off = PlayOffline(), on = buttonsOn && !offlineBusy;
-            int aw = r.Height - 4;                                        // (the mode part: a little narrower than the pill is tall)
-            var main = new Rectangle(r.X, r.Y, r.Width - aw, r.Height);
-            var ar = new Rectangle(main.Right, r.Y, aw, r.Height);
-            string idMain = pre + "offline", idMode = pre + "playmode";
-            if (on) { hits[idMain] = main; hits[idMode] = ar; } else { hits.Remove(idMain); hits.Remove(idMode); }
-            Fill(g, r, on ? CAccent : CSurf2, 8);
-            if (on && (hover == idMain || hover == idMode))
-                using (var path = Round(r, 8)) using (var b = new SolidBrush(CAccentHi))
-                {
-                    var clip = g.Clip; g.SetClip(path, CombineMode.Intersect);
-                    g.FillRectangle(b, hover == idMain ? main : ar);
-                    g.Clip = clip;
-                }
-            Color fg = on ? CAccentInk : InkOff;
-            using (var p = new Pen(Color.FromArgb(on ? 70 : 40, fg.R, fg.G, fg.B), 1f)) g.DrawLine(p, ar.X, r.Y + 9, ar.X, r.Bottom - 9);
-            Glyph(g, "down", new Rectangle(ar.X + (aw - 16) / 2, ar.Y + (r.Height - 16) / 2, 16, 16), fg);
-            string text = offlineBusy ? "SANDBOX ON" : off ? "PLAY OFFLINE" : "PLAY";
-            if (offlineBusy) { TxtH(g, text, 17, fg, main, DT_CENTER | DT_VCENTER | DT_SINGLELINE, 1); return; }
-            int tw = TextWidth(text, 17, true, true) + text.Length;
-            int x = main.X + Math.Max(8, (main.Width - tw - 22) / 2);
-            Glyph(g, "play", new Rectangle(x, main.Y + (main.Height - 16) / 2, 16, 16), fg);
-            TxtH(g, text, 17, fg, new Rectangle(x + 22, main.Y, main.Right - x - 22, main.Height), DT_LEFT | DT_VCENTER | DT_SINGLELINE, 1);
-        }
-        // the mode list: a small menu right under the pill, as wide as it
-        void PlayModeMenu()
-        {
-            Rectangle r;
-            string pill = hover != null && hover.EndsWith("playmode") ? hover.Substring(0, hover.Length - 8) + "offline" : "offline";
-            if (!hits.TryGetValue(pill, out r)) return;
-            Rectangle ar; hits.TryGetValue(pill.Replace("offline", "playmode"), out ar);
-            r = Rectangle.Union(r, ar);
-            bool off = PlayOffline();
-            int w = Math.Max(240, (int)(r.Width * uiScale));
-            var m = new ContextMenuStrip { Renderer = new DarkMenuRenderer(), BackColor = CSurf, ForeColor = CText,
-                                           ShowImageMargin = false, ShowCheckMargin = true, Font = new Font("Segoe UI", 10f), Padding = new Padding(0, 4, 0, 4) };
-            Func<string, string, bool, ToolStripMenuItem> item = (text, mode, check) =>
-            {
-                var it = new ToolStripMenuItem(text) { Checked = check, ForeColor = CText, AutoSize = false, Width = w, Height = 34 };
-                it.Click += (s, e) => { var o = Options(); o["play_mode"] = mode; SaveOptions(o); Redraw(); };
-                return it;
-            };
-            m.Items.Add(item("Live War", "official", !off));
-            m.Items.Add(item("Singleplayer (offline sandbox)", "offline", off));
-            m.Closed += (s, e) => BeginInvoke((Action)(() => m.Dispose()));
-            m.Show(PointToScreen(new Point((int)(r.X * uiScale), (int)((r.Bottom + 6) * uiScale))));
-        }
-        class DarkMenuRenderer : ToolStripProfessionalRenderer
-        {
-            public DarkMenuRenderer() : base(new DarkMenuColors()) { }
-            protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e)      // (the stock check is a dark glyph - unseen here)
-            {
-                var r = e.ImageRectangle;
-                Glyph(e.Graphics, "check", new Rectangle(r.X + (r.Width - 16) / 2, r.Y + (r.Height - 16) / 2, 16, 16), CAccent);
-            }
-            protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e) { e.TextColor = CText; base.OnRenderItemText(e); }
-        }
-        class DarkMenuColors : ProfessionalColorTable
-        {
-            public override Color ToolStripDropDownBackground { get { return CSurf; } }
-            public override Color MenuBorder { get { return CLine2; } }
-            public override Color MenuItemBorder { get { return CLine2; } }
-            public override Color MenuItemSelected { get { return CSurf2; } }
-            public override Color ImageMarginGradientBegin { get { return CSurf; } }
-            public override Color ImageMarginGradientMiddle { get { return CSurf; } }
-            public override Color ImageMarginGradientEnd { get { return CSurf; } }
-            public override Color CheckBackground { get { return CSurf2; } }
-            public override Color CheckSelectedBackground { get { return CSurf2; } }
-            public override Color CheckPressedBackground { get { return CSurf2; } }
+            Btn(g, pre + "offline", buttonsOn && !offlineBusy ? "PLAY" : "BUSY...", r, 0, buttonsOn && !offlineBusy, buttonsOn && !offlineBusy ? "play" : null);
         }
         void DrawHomePublic(Graphics g)
         {
             var hero = new Rectangle(CX, CY, CR - CX, 250);
             Card(g, hero);
-            bool off = PlayOffline();
-            Badge(g, off ? "OFFLINE SANDBOX" : "LIVE WAR", hero.X + 28, hero.Y + 26, CAccent);
-            TxtH(g, off ? "Play Foxhole on your own" : "Play the live war", 34, CText, new Rectangle(hero.X + 26, hero.Y + 58, 640, 44), DT_LEFT | DT_SINGLELINE, 1);
-            Txt(g, off ? "Pick any hex and a faction. Only this PC can join. Your game is changed only while the sandbox runs and is put back to original when you close it."
-                       : "Joins the live war through Steam, with the cosmetic mods you switched on. The arrow on the PLAY button switches to the solo offline sandbox.",
+            Badge(g, "LIVE WAR", hero.X + 28, hero.Y + 26, CAccent);
+            TxtH(g, "Play the live war", 34, CText, new Rectangle(hero.X + 26, hero.Y + 58, 640, 44), DT_LEFT | DT_SINGLELINE, 1);
+            Txt(g, "Starts Foxhole through Steam, with the cosmetic mods you switched on in Installed.",
                 14, false, CText2, new Rectangle(hero.X + 28, hero.Y + 108, 600, 44), DT_LEFT | DT_WORDBREAK, 0, false);
-            PlaySplit(g, "", new Rectangle(hero.X + 28, hero.Y + 176, 250, 46));
-            Btn(g, "pubupdate", "Check for updates", new Rectangle(hero.X + 292, hero.Y + 182, 160, 34), 2, true);
+            PlayPill(g, "", new Rectangle(hero.X + 28, hero.Y + 176, 200, 46));
+            Btn(g, "pubupdate", "Check for updates", new Rectangle(hero.X + 242, hero.Y + 182, 160, 34), 2, true);
+            string[] steps = { "Switch your mods on in Installed", "Press PLAY: Steam starts Foxhole", "Your switched-on mods load with the game" };
+            string modsNote = "Switched-on cosmetic mods load with the game.";
+            HeroSteps(g, hero, steps);
+            int y = hero.Bottom + 20, w = (CR - CX - 32) / 3;
+            InfoCard(g, new Rectangle(CX, y, w, 150), "box", "Your mods", installedCount + " installed", modsNote, "nav:installed", "Manage");
+            InfoCard(g, new Rectangle(CX + w + 16, y, w, 150), "search", "Browse mods", "Nexus Mods", "Find Foxhole mods and add them in one step.", "nav:browse", "Browse");
+            MachineCard(g, new Rectangle(CX + 2 * (w + 16), y, w, 150));
+        }
+        // the three numbered steps at the hero's right (both editions)
+        void HeroSteps(Graphics g, Rectangle hero, string[] steps)
+        {
             int sx = hero.X + 680, sy = hero.Y + 30;
-            string[] steps = off ? new[] { "Pick a hex and a faction", "The sandbox server starts on this PC", "Close the game: Foxhole goes back to original" }
-                                 : new[] { "Switch your mods on in Installed", "Press PLAY: Steam starts Foxhole", "The arrow on PLAY: the offline sandbox" };
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < steps.Length; i++)
             {
                 var cr = new Rectangle(sx, sy + i * 62, 30, 30);
                 Fill(g, cr, CSurf2, 15); Edge(g, cr, CLine2, 15);
                 Txt(g, (i + 1).ToString(), 13, true, CAccent, cr, DT_CENTER | DT_VCENTER | DT_SINGLELINE, 0, false);
                 Txt(g, steps[i], 13, false, CText2, new Rectangle(sx + 42, sy + i * 62, hero.Right - sx - 60, 34), DT_LEFT | DT_WORDBREAK, 0, false);
             }
-            int y = hero.Bottom + 20, w = (CR - CX - 32) / 3;
-            InfoCard(g, new Rectangle(CX, y, w, 150), "box", "Your mods", installedCount + " installed", "Cosmetic mods work online and in the sandbox.", "nav:installed", "Manage");
-            InfoCard(g, new Rectangle(CX + w + 16, y, w, 150), "search", "Browse mods", "Nexus Mods", "Find Foxhole mods and add them in one step.", "nav:browse", "Browse");
-            MachineCard(g, new Rectangle(CX + 2 * (w + 16), y, w, 150));
         }
         void InfoCard(Graphics g, Rectangle r, string icon, string title, string value, string text, string id, string action)
         {
@@ -489,8 +425,7 @@ namespace FoxholeModLauncher
         }
         void DrawInstalledPage(Graphics g)
         {
-            Txt(g, PublicEdition ? "Switched-on mods go into your Foxhole - official play and the offline sandbox." :
-                "Switched-on mods go into your Foxhole (official play too). Our servers never refuse you for them.", 13, false, CMuted,
+            Txt(g, "Switched-on mods go into your Foxhole - the live game loads them.", 13, false, CMuted,
                 new Rectangle(CX, CY, CR - 506 - CX, 34), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, 0, false);
             bool free = buttonsOn && !offlineBusy;
             Btn(g, "mod:add", "Add mod file", new Rectangle(CR - 150, CY, 150, 34), 0, free, "plus");
@@ -585,9 +520,10 @@ namespace FoxholeModLauncher
             Card(g, gf);
             TxtH(g, "Game files", 18, CText, new Rectangle(gf.X + 22, gf.Y + 16, 300, 26), DT_LEFT | DT_VCENTER | DT_SINGLELINE, 0);
             {
-                Txt(g, "Your game is only changed while the sandbox runs. If something went wrong, put it back by hand.", 12, false, CMuted,
+                Txt(g, "The offline sandbox of version 1.0.0 is removed for now. If you used it, Restore the game puts the original files back.", 12, false, CMuted,
                     new Rectangle(gf.X + 22, gf.Y + 50, gf.Width - 44, 40), DT_LEFT | DT_WORDBREAK, 0, false);
-                Btn(g, "set:restore", "Restore the game", new Rectangle(gf.X + 22, gf.Bottom - 52, 160, 34), 1, buttonsOn);
+                Btn(g, "set:restore", "Restore the game", new Rectangle(gf.X + 22, gf.Bottom - 52, 160, 34), 1,
+                    buttonsOn && (markerOn || (gameTrace != null && gameTraceRestorable)));
             }
             var mb = new Rectangle(CX + w + 16, y, w, 150);
             Card(g, mb);
@@ -603,7 +539,7 @@ namespace FoxholeModLauncher
                 // (2026-11-18, GPL-3.0 "Appropriate Legal Notices": copyright, no warranty, where the license is)
                 int ly = mb.Bottom + 18;
                 Txt(g, PUBLIC_NAME + " " + NexusHttp.AppVersion + " - Copyright (C) 2026 Foxhole Mod Manager contributors. Free software under the GNU GPL version 3 only (GPL-3.0-only), " +
-                    "with ABSOLUTELY NO WARRANTY. The offline sandbox components are separate programs under their own license.", 12, false, CMuted,
+                    "with ABSOLUTELY NO WARRANTY.", 12, false, CMuted,
                     new Rectangle(CX, ly, CR - CX - 140, 36), DT_LEFT | DT_WORDBREAK, 0, false);
                 Btn(g, "br:licenses", "Licenses", new Rectangle(CR - 120, ly, 120, 34), 2, true);
             }
