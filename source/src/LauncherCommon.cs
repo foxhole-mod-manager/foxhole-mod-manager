@@ -25,7 +25,9 @@ namespace FoxholeModLauncher
     {
         static bool Headless;                       // (command-line mode: no window, everything to the console + launcher.log)
 
-        [DllImport("kernel32.dll")] static extern bool AttachConsole(int pid);
+        // (1.1.1) the public app does not attach to a console: its command-line modes (tests) write to the output they are given - a
+        // redirected stdout - and nothing shows in a plain console window. One Windows call less for antivirus heuristics.
+        static bool AttachConsole(int pid) { return false; }
 
         // (also opens a file's ":Zone.Identifier" stream - the Mark of the Web, LauncherMods.cs)
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]

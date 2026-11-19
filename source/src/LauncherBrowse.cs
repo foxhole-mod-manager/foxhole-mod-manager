@@ -47,10 +47,9 @@ namespace FoxholeModLauncher
             "The browser asks Nexus Mods for its public list of Foxhole mods. Nexus and its image servers see your IP address and this app's " +
             "name, as any website does; no account, no Steam ID and nothing about your PC is sent; no tracking or analytics.\n\n" +
             "DOWNLOAD opens Nexus in your own browser, under Nexus' privacy policy.\n\n" +
-            "The list and thumbnails are kept on this PC only (CLEAR CACHE deletes them).\n\nData from Nexus Mods. Every mod belongs to its author.\n\n" +
-            ".7z MODS: unpacking one needs 7-Zip's small console tool (7zr.exe). With your OK - asked once - the app downloads it from 7-Zip's " +
-            "official site, www.7-zip.org, and checks it against a pinned checksum. 7-zip.org sees your IP address and this app's name, as any " +
-            "website does; nothing else is sent."
+            "The list and thumbnails are kept on this PC only (CLEAR CACHE deletes them).\n\nData from Nexus Mods. Every mod belongs to its author."
+            // (1.1.1: no .7z support compiled in - nothing is downloaded from 7-zip.org, no tool is started)
+            + "\n\n.7z MODS: unpack them with 7-Zip first, then add the .pak (or zip the unpacked files and add the .zip). The app downloads no extra tools."
             + "\n\nCHECK FOR UPDATES reads one small file (update.json) from the project's GitHub repository (raw.githubusercontent.com): the " +
             "newest version. GitHub sees your IP address and this app's name, as any website does; nothing else is sent."
             ;

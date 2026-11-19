@@ -97,7 +97,7 @@ namespace FoxholeModLauncher
             return below.Count > 0 ? BELOW : low.Count > 0 ? LOW : OK;
         }
 
-        // integrated graphics? (DXGI vendor id, the adapter's name, its dedicated memory). Intel's are integrated except Arc cards; AMD's
+        // integrated graphics? (the PCI vendor id, the adapter's name, its dedicated memory). Intel's are integrated except Arc cards; AMD's
         // APUs by name (Radeon Graphics / Vega n Graphics / 680M-890M); anything else with under 1 GB of its own memory.
         public static bool IsIntegrated(string name, uint vendor, double dedicatedGb)
         {

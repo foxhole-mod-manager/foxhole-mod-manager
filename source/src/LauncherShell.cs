@@ -301,8 +301,8 @@ namespace FoxholeModLauncher
         void DrawHeader(Graphics g)
         {
             using (var p = new Pen(CLine)) g.DrawLine(p, SIDE, HDR - 1, W, HDR - 1);
-            string title = page == "servers" ? "Servers" : page == "installed" ? "Installed mods" : page == "tools" ? "Tools" :
-                           page == "settings" ? "Settings" : page == "activity" ? "Activity" : page == "browse" ? "" : "Play";
+            string title = page == "installed" ? "Installed mods" : page == "settings" ? "Settings" : page == "activity" ? "Activity" :
+                           page == "browse" ? "" : "Play";
             if (page == "browse") DrawBrowseHeader(g);
             else TxtH(g, title, 24, CText, new Rectangle(CX, 0, 400, HDR), DT_LEFT | DT_VCENTER | DT_SINGLELINE, 1);
             // the primary action, on every page
@@ -333,7 +333,8 @@ namespace FoxholeModLauncher
                 if (progress > 0) Fill(g, new Rectangle(r.X, r.Y, r.Width * Math.Min(100, progress) / 100, 3), CAccent, 0);
             }
             Fill(g, new Rectangle(CX, r.Y + 18, 8, 8), !buttonsOn ? CAccent : CGood, 4);
-            string right = PublicEdition ? PUBLIC_NOTICE : address != "" ? "SERVER  " + address : "";
+            const string serverLabel = "";                // (1.1.1 review: the private edition's "SERVER" label is not in the public exe)
+            string right = PublicEdition ? PUBLIC_NOTICE : address != "" ? serverLabel + address : "";
             int rw = right == "" ? 0 : Math.Min(420, TextWidth(right, 12, false, false) + right.Length + 8);   // (+ its 1 px letter spacing)
             Txt(g, statusText, 13, false, CText2, new Rectangle(CX + 18, r.Y, CR - rw - 24 - CX - 18, r.Height), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, 0, false);
             Txt(g, right, 12, false, CFaint, new Rectangle(CR - rw, r.Y, rw, r.Height), DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, 1, false);
@@ -481,7 +482,7 @@ namespace FoxholeModLauncher
                 var z = new Rectangle(CX, y, CR - CX, 200);
                 using (var p = Round(new Rectangle(z.X, z.Y, z.Width - 1, z.Height - 1), 12)) using (var pen = new Pen(CLine2, 1.5f) { DashStyle = DashStyle.Dash }) g.DrawPath(pen, p);
                 Glyph(g, "download", new Rectangle(z.X + z.Width / 2 - 14, z.Y + 46, 28, 28), CMuted);
-                Txt(g, "Drop a .pak, .zip or .7z here", 15, true, CText, new Rectangle(z.X, z.Y + 88, z.Width, 24), DT_CENTER | DT_SINGLELINE, 0, false);
+                Txt(g, PublicEdition ? "Drop a .pak or .zip here" : "Drop a .pak, .zip or .7z here", 15, true, CText, new Rectangle(z.X, z.Y + 88, z.Width, 24), DT_CENTER | DT_SINGLELINE, 0, false);
                 Txt(g, "or use Add mod file. Downloads from Browse mods are offered by themselves. Only .pak and settings files are ever kept.", 12, false, CMuted,
                     new Rectangle(z.X, z.Y + 116, z.Width, 20), DT_CENTER | DT_SINGLELINE, 0, false);
             }
@@ -548,8 +549,7 @@ namespace FoxholeModLauncher
         // ---------------------------------------------------------------------------------------------------- activity
         void DrawActivityPage(Graphics g)
         {
-            Txt(g, PublicEdition ? "What the app did (launcher.log in " + DataDir.TrimEnd('\\') + ")." :
-                "What the launcher did - send this to the host when something fails (launcher.log next to the launcher).", 13, false, CMuted,
+            Txt(g, "What the app did (launcher.log in " + DataDir.TrimEnd('\\') + ").", 13, false, CMuted,
                 new Rectangle(CX, CY, 640, 34), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, 0, false);
             var box = new Rectangle(CX, CY + 50, CR - CX, CB - CY - 50);
             Fill(g, box, Color.FromArgb(17, 18, 20), 10); Edge(g, box, CLine, 10);

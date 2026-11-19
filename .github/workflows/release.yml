@@ -1,0 +1,134 @@
+# Builds Foxhole Mod Manager from source/ on GitHub's Windows machines, so every release binary comes straight from the public source
+# (SignPath Foundation's condition for free code signing). Runs on a version tag (v1.2.3) or by hand (a build without a release).
+# Signing: once the SignPath.io project exists, add the repository secret SIGNPATH_API_TOKEN and the variables SIGNPATH_ORGANIZATION_ID,
+# SIGNPATH_PROJECT_SLUG and SIGNPATH_SIGNING_POLICY_SLUG; until then the release is built unsigned.
+# A tag makes a DRAFT release only: the maintainer downloads the draft's zip, tests it (clean PC + VirusTotal) and then publishes the
+# draft by hand on GitHub. Nothing here publishes a release or marks one as the latest.
+# Third-party actions are pinned to full commit SHAs (the version in the comment next to each).
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read          # (SignPath reads the unsigned build artifact through the workflow's token)
+    env:
+      HAS_SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Build the app from source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out\FoxholeModManager | Out-Null
+          powershell -NoProfile -ExecutionPolicy Bypass -File source\build.ps1 -Out "$PWD\out\FoxholeModManager\FoxholeModManager.exe"
+          if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
+
+      - name: Check the version (a tag must match the exe's ProductVersion)
+        shell: pwsh
+        run: |
+          $pv = (Get-Item out\FoxholeModManager\FoxholeModManager.exe).VersionInfo.ProductVersion
+          if (-not $pv) { throw 'the exe has no ProductVersion' }
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $tv = $env:GITHUB_REF_NAME.TrimStart('v')
+            if ($tv -ne $pv) { throw "tag $env:GITHUB_REF_NAME does not match the exe's ProductVersion $pv - not released" }
+          }
+          "APP_VERSION=$pv" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "version $pv"
+
+      - name: Package (app, README, license)
+        shell: pwsh
+        run: |
+          $t = (Get-Content -Raw packaging\README.txt).Replace("`r`n", "`n").Replace("`n", "`r`n")
+          $t.Replace('@@VERSION@@', $env:APP_VERSION).Replace('@@REPO@@', $env:GITHUB_REPOSITORY) |
+            Set-Content -NoNewline -Encoding utf8 out\FoxholeModManager\README.txt
+          Copy-Item LICENSE out\FoxholeModManager\LICENSE.txt
+          Get-ChildItem out\FoxholeModManager | Select-Object Name, Length
+
+      - name: Upload the unsigned build
+        id: unsigned
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: FoxholeModManager-unsigned
+          path: out\FoxholeModManager
+          if-no-files-found: error
+
+      - name: Sign with SignPath (when configured)
+        if: ${{ env.HAS_SIGNPATH == 'true' }}
+        uses: signpath/github-action-submit-signing-request@ced31329c0317e779dad2eec2a7c3bb46ea1343e # v1.3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600     # (every request is approved by hand - up to an hour)
+          output-artifact-directory: out\signed
+
+      - name: Zip (signed when signing is on - checked; unsigned otherwise)
+        shell: pwsh
+        run: |
+          if ($env:HAS_SIGNPATH -eq 'true') {
+            $src = 'out\signed'
+            $exe = Join-Path $src 'FoxholeModManager.exe'
+            if (-not (Test-Path $exe)) { throw 'signing is on but SignPath returned no FoxholeModManager.exe' }
+            $sig = Get-AuthenticodeSignature $exe
+            if ($sig.Status -ne 'Valid') { throw "the signed exe's signature is $($sig.Status) - not released" }
+            "signed by: $($sig.SignerCertificate.Subject)"
+          } else {
+            $src = 'out\FoxholeModManager'
+            'unsigned build (SignPath not configured)'
+          }
+          New-Item -ItemType Directory -Force zip\FoxholeModManager, release | Out-Null
+          Copy-Item "$src\*" zip\FoxholeModManager -Recurse
+          $names = @(Get-ChildItem zip\FoxholeModManager -Recurse -File | ForEach-Object Name | Sort-Object)
+          if (($names -join ',') -ne 'FoxholeModManager.exe,LICENSE.txt,README.txt') { throw "unexpected package contents: $($names -join ', ')" }
+          Compress-Archive -Path zip\FoxholeModManager -DestinationPath release\FoxholeModManager.zip
+          Copy-Item packaging\release-notes.md release\release-notes.md
+          $h = (Get-FileHash release\FoxholeModManager.zip -Algorithm SHA256).Hash
+          "$h  FoxholeModManager.zip" | Set-Content -Encoding ascii release\FoxholeModManager.zip.sha256
+          "zip SHA256 $h"
+
+      - name: Upload the release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: FoxholeModManager-release
+          path: release
+          if-no-files-found: error
+
+  release:
+    # (a tag only: a DRAFT release - the maintainer tests its zip and publishes it by hand)
+    if: ${{ github.ref_type == 'tag' }}
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: FoxholeModManager-release
+          path: release
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release create $env:GITHUB_REF_NAME release\FoxholeModManager.zip release\FoxholeModManager.zip.sha256 `
+            --repo $env:GITHUB_REPOSITORY --draft --verify-tag `
+            --title "Foxhole Mod Manager $($env:GITHUB_REF_NAME.TrimStart('v'))" --notes-file release\release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed ($LASTEXITCODE)" }

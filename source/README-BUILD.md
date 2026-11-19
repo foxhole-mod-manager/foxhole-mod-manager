@@ -12,7 +12,7 @@ script uses the C# compiler that ships with the .NET Framework (`%WINDIR%\Micros
 The program is written to `bin\FoxholeModManager.exe` (`-Out <path>` for another place). It is compiled with `/define:PUBLIC`, the
 references in `build.ps1` (Windows Forms, System.Drawing, System.Web.Extensions, System.IO.Compression and the WPF assemblies
 PresentationCore / WindowsBase / System.Xaml), the icon `resources\logo.ico` and the application manifest
-`resources\launcher.manifest` (runs as the normal user, never asks for administrator rights).
+`resources\app.manifest` (runs as the normal user, never asks for administrator rights; Windows 10 / 11).
 
 `public_release.json` names the GitHub repository (`owner/name`) whose releases the app's update check reads (this project's own).
 For a build of your own, put your repository there (the example: `public_release.example.json`) or delete the file: without it the app

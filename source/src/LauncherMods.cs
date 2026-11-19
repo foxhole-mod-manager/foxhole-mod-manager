@@ -28,10 +28,9 @@ namespace FoxholeModLauncher
         static readonly string ModsRoot = Path.Combine(DataDir, "mods");                        // (public: in app data - Launcher.cs DataDir)
         static readonly string CosDir = Path.Combine(ModsRoot, "cosmetic");
         static readonly string CosInstalledPath = Path.Combine(CosDir, "installed.json");
-        static readonly string SevenZr = Path.Combine(ModsRoot, "tools", "7zr.exe");
-        const string SEVENZR_URL = "https://www.7-zip.org/a/7zr.exe";                 // 7-Zip 26.04 console (Igor Pavlov, LGPL / public domain)
-        const string SEVENZR_SHA = "256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282";
-        const long SEVENZR_SIZE = 602624;
+        // (1.1.1, 2026-11-18: fewer things for antivirus heuristics - no downloaded tool, no process started; .zip / .pak only)
+        const string NO_7Z = "Unpack .7z mods with 7-Zip first, then add the .pak (or zip the unpacked files and add the .zip).";
+        const string MOD_FILTER = "Foxhole mods (*.pak;*.zip)|*.pak;*.zip";
         const string NEXUS_URL = "https://www.nexusmods.com/foxhole/mods/";
         const string OUR_MOD_PAK = "War-WindowsNoEditor_1_P.pak";
         // the folders the unpatched game keeps from extra paks (its start-up filter; War\Content-relative, read from the exe 2026-11-18)
@@ -157,13 +156,14 @@ namespace FoxholeModLauncher
         }
 
         // ---------------------------------------------------------------------------------------------------- add
-        // a .pak, .zip or .7z -> the store; returns the new mod's id
+        // a .pak, .zip or .7z (private only) -> the store; returns the new mod's id
         string CosAdd(string file, bool yes) { lock (cosLock) return CosAddLocked(file, yes); }
         string CosAddLocked(string file, bool yes)
         {
             if (!File.Exists(file)) throw new Exception("file not found: " + file);
             string ext = Path.GetExtension(file).ToLowerInvariant();
-            if (ext != ".pak" && ext != ".zip" && ext != ".7z") throw new Exception("a cosmetic mod is a .pak, .zip or .7z file");
+            if (ext == ".7z") throw new Exception(NO_7Z);
+            if (ext != ".pak" && ext != ".zip") throw new Exception("a cosmetic mod is a .pak or .zip file");
             string baseName = Path.GetFileNameWithoutExtension(file);
             // (Nexus Mods names its files "<Name>-<mod id>-<version...>-<time>": the page is .../foxhole/mods/<mod id>; the version and the
             //  upload time are kept for update checks - LauncherModUpdates.cs, LauncherModUpdateRules.cs Parse)
@@ -192,7 +192,7 @@ namespace FoxholeModLauncher
                     // (unpacked into a fresh temp folder, every path checked before writing; then only .pak and the allowed settings files go into
                     //  the store - nothing else of an archive is ever kept, run or copied into the game)
                     Directory.CreateDirectory(tmp);
-                    if (ext == ".zip") SafeUnzip(file, tmp); else Unpack7z(file, tmp, yes);
+                    SafeUnzip(file, tmp);
                     AssertNoLinks(tmp);
                     CheckUnpacked(tmp);
                     var zone = ReadZone(file);
@@ -291,58 +291,6 @@ namespace FoxholeModLauncher
                 }
             }
         }
-        static void Check7zListing(string archive)
-        {
-            string outp, err;
-            if (Run7z("l -slt -sccUTF-8 -- \"" + archive + "\"", 60000, out outp, out err) != 0) throw new Exception("7-Zip could not read the archive");
-            var lines = outp.Replace("\r\n", "\n").Split('\n');
-            int at = Array.IndexOf(lines, "----------");                                       // (entries follow the archive's own block)
-            if (at < 0) throw new Exception("7-Zip could not list the archive");
-            long total = 0; int count = 0;
-            var entry = new Dictionary<string, string>();
-            var keyLine = new Regex(@"^([A-Za-z][A-Za-z ]*) = (.*)$");
-            for (int i = at + 1; i <= lines.Length; i++)
-            {
-                string line = i < lines.Length ? lines[i] : "";
-                if (line != "")
-                {
-                    var km = keyLine.Match(line);
-                    if (!km.Success || entry.ContainsKey(km.Groups[1].Value)) throw new Exception("7-Zip's listing of the archive looks wrong - refused");
-                    entry[km.Groups[1].Value] = km.Groups[2].Value;
-                    continue;
-                }
-                if (entry.Count == 0) continue;
-                string path, attr, size, enc;
-                if (!entry.TryGetValue("Path", out path)) throw new Exception("7-Zip's listing of the archive looks wrong - refused");
-                entry.TryGetValue("Attributes", out attr); entry.TryGetValue("Size", out size); entry.TryGetValue("Encrypted", out enc);
-                attr = attr ?? "";
-                count++;
-                SafeRel(path);
-                // (links: a POSIX "l" mode or the Windows reparse-point flag in 7-Zip's attribute text)
-                if (Regex.IsMatch(attr, @"(^|\s)l[r-][w-]") || attr.Contains("L")) throw new Exception("the archive holds a link (" + path + ") - refused");
-                if (enc == "+") throw new Exception("the archive is password-protected - refused");
-                long n; if (!string.IsNullOrEmpty(size)) { if (!long.TryParse(size, out n) || n < 0) throw new Exception("7-Zip's listing of the archive looks wrong - refused"); total += n; }
-                entry.Clear();
-            }
-            if (count > ENTRIES_MAX) throw new Exception("the archive holds too many files (" + count + ")");
-            if (total > UNPACKED_MAX) throw new Exception("the archive unpacks to more than " + (UNPACKED_MAX >> 30) + " GB - refused");
-        }
-        // 7zr with stdin closed (never waits for input), both outputs read at once (no pipe deadlock), a time limit (killed after it)
-        static int Run7z(string args, int ms, out string stdout, out string stderr)
-        {
-            var psi = new ProcessStartInfo(SevenZr, args)
-            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-              StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8 };
-            using (var p = Process.Start(psi))
-            {
-                p.StandardInput.Close();
-                var o = p.StandardOutput.ReadToEndAsync(); var e = p.StandardError.ReadToEndAsync();
-                if (!p.WaitForExit(ms)) { try { p.Kill(); } catch { } throw new Exception("7-Zip took too long - stopped"); }
-                p.WaitForExit();
-                stdout = o.Result; stderr = e.Result;
-                return p.ExitCode;
-            }
-        }
         // after unpacking: the real files against the caps again (the listing is 7-Zip's claim; the archive could also change in between)
         static void CheckUnpacked(string d)
         {
@@ -385,26 +333,6 @@ namespace FoxholeModLauncher
             catch { }
         }
 
-        void Unpack7z(string archive, string dest, bool yes)
-        {
-            if (!File.Exists(SevenZr) || Sha256(SevenZr) != SEVENZR_SHA)
-            {
-                bool go = yes;
-                if (!Headless && !yes)
-                    Invoke((Action)(() => go = MessageBox.Show(this, "This mod is a .7z archive. Unpacking it needs 7-Zip's small console tool 7zr.exe (600 KB) " +
-                        "from its official site, www.7-zip.org.\n\nDownload it now?", "Cosmetic mods", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes));
-                if (!go) throw new Exception(".7z needs 7-Zip's 7zr.exe - not downloaded");
-                Say("downloading 7zr.exe from " + SEVENZR_URL);
-                Fetch(SEVENZR_URL, SevenZr + ".new", SEVENZR_SIZE, false);
-                if (Sha256(SevenZr + ".new") != SEVENZR_SHA) { File.Delete(SevenZr + ".new"); throw new Exception("7zr.exe from 7-zip.org is not the pinned file (checksum) - not used"); }
-                if (File.Exists(SevenZr)) File.Delete(SevenZr);
-                File.Move(SevenZr + ".new", SevenZr);
-            }
-            Check7zListing(archive);
-            string outp, err;
-            if (Run7z("x -y -bd -spd -sccUTF-8 \"-o" + dest + "\" -- \"" + archive + "\"", 600000, out outp, out err) != 0)
-                throw new Exception("could not unpack the archive (7-Zip: " + err.Trim() + ")");
-        }
 
         // ---------------------------------------------------------------------------------------------------- on / off / remove
         void CosEnable(string id, bool on) { lock (cosLock) CosEnableLocked(id, on); }
@@ -709,7 +637,14 @@ namespace FoxholeModLauncher
                     try { long n = new FileInfo(path).Length; using (File.Open(path, FileMode.Open, FileAccess.Read, FileShare.None)) { } if (n == last && n > 0) { done = true; break; } last = n; }
                     catch { last = -1; }
                 }
-                if (!done) return;
+                if (!done) return;                                        // (still growing after 2 minutes - not offered half-finished)
+                if (ext == ".7z")                                         // (1.1.1: no .7z support in the public app - said once, never added)
+                {
+                    modsLine = NO_7Z;
+                    try { Invoke((Action)(() => { MessageBox.Show(this, Path.GetFileName(path) + "\n\nThis download is a .7z archive. " + NO_7Z, "Cosmetic mods", MessageBoxButtons.OK, MessageBoxIcon.Information); Redraw(); })); }
+                    catch { }
+                    return;
+                }
                 OfferDecision dec;
                 try { dec = ModUpdateRules.Decide(nf, InstalledNexusFiles(), ListedOrUnknown, ModUpdateRules.UnixNow()); }
                 catch (Exception ex) { Say("cosmetic mods: " + ex.Message); return; }
@@ -769,7 +704,7 @@ namespace FoxholeModLauncher
         {
             if (h == "add")
             {
-                using (var d = new OpenFileDialog { Title = "Add a cosmetic mod", Filter = "Foxhole mods (*.pak;*.zip;*.7z)|*.pak;*.zip;*.7z",
+                using (var d = new OpenFileDialog { Title = "Add a cosmetic mod", Filter = MOD_FILTER,
                     InitialDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads") })
                     if (d.ShowDialog(this) == DialogResult.OK && ModsFreeOrSay()) { string f = d.FileName; ModsRun(() => CosAdd(f, false)); }
             }

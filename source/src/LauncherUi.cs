@@ -21,7 +21,6 @@ namespace FoxholeModLauncher
 {
     partial class Launcher : Form
     {
-        [DllImport("gdi32.dll")] static extern IntPtr AddFontMemResourceEx(IntPtr pb, uint cb, IntPtr pdv, ref uint pcFonts);
         [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
         static extern IntPtr CreateFontW(int h, int w, int esc, int orient, int weight, uint italic, uint underline, uint strike,
                                          uint charset, uint outPrec, uint clipPrec, uint quality, uint pitch, string face);
@@ -55,7 +54,6 @@ namespace FoxholeModLauncher
         string statusText = "Starting...", releaseText = "", hover = "", shotState = "";
         int progress = -1;                                   // -1 = no bar
         bool buttonsOn = true, details;
-        string devDialog = "";
         readonly List<string> logLines = new List<string>();
         readonly Dictionary<string, Rectangle> hits = new Dictionary<string, Rectangle>();
 
@@ -80,8 +78,6 @@ namespace FoxholeModLauncher
             if (args.Length == 0 && !SingleInstance()) return;           // (a second start: the open window comes to the front)
             var l = new Launcher();
             if (args.Length >= 2 && args[0] == "--shot") { l.Shot(args[1], args.Length > 2 ? args[2] : "idle"); return; }
-            // (dev: one of the dialogs on its own - "host" / "address" - for a picture; nothing is saved unless its OK is pressed)
-            if (args.Length >= 2 && args[0] == "--dialog") { l.Shown -= null; l.devDialog = args[1]; }
             Application.Run(l);
         }
 
@@ -169,7 +165,8 @@ namespace FoxholeModLauncher
                     if (to != modsPage) { modsPage = to; Redraw(); }
                 }
             };
-            // a .pak / .zip / .7z dropped on the window: added like ADD FILE (checked first; switched on in Installed)
+            // a .pak / .zip / .7z dropped on the window: added like ADD FILE (checked first; switched on in Installed). (1.1.1) the public app takes
+            // no .7z: the others are added, then the line asks for the .pak (LauncherMods.cs NO_7Z)
             DragEnter += (s, e) => { e.Effect = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None; };
             DragDrop += (s, e) =>
             {
@@ -177,13 +174,19 @@ namespace FoxholeModLauncher
                 if (files == null) return;
                 if (!buttonsOn || offlineBusy) return;                    // (not while the game is being changed)
                 var take = new List<string>();
+                bool sevenZ = false;
                 foreach (var f in files)
                 {
                     string ext = Path.GetExtension(f).ToLowerInvariant();
+                    if (ext == ".7z") { sevenZ = true; continue; }
                     if (ext == ".pak" || ext == ".zip" || ext == ".7z") take.Add(f);
                 }
-                if (take.Count == 0) return;
-                ModsRun(() => { foreach (var f in take) CosAdd(f, false); });
+                if (take.Count == 0 && !sevenZ) return;
+                ModsRun(() =>
+                {
+                    foreach (var f in take) CosAdd(f, false);
+                    if (sevenZ) throw new Exception(NO_7Z);
+                });
                 Go("installed");
             };
         }
@@ -267,15 +270,6 @@ namespace FoxholeModLauncher
             foreach (var n in typeof(Launcher).Assembly.GetManifestResourceNames()) if (n.StartsWith("wall")) walls.Add(n);
             if (walls.Count > 0) wall = Img(walls[new Random().Next(walls.Count)]);
             logo = Img("logo.png"); header = Img("header.png"); warden = Img("warden.png"); colonial = Img("colonial.png");
-            foreach (var n in new[] { "renner-bold.otf", "renner-book.otf" })
-            {
-                var s = Res(n);
-                if (s == null) continue;
-                var b = new byte[s.Length]; s.Read(b, 0, b.Length);
-                IntPtr mem = Marshal.AllocCoTaskMem(b.Length);            // (kept for the process' lifetime - GDI reads it)
-                Marshal.Copy(b, 0, mem, b.Length);
-                uint count = 0; AddFontMemResourceEx(mem, (uint)b.Length, IntPtr.Zero, ref count);
-            }
         }
         IntPtr FontOf(int px, bool bold)
         {
@@ -392,7 +386,7 @@ namespace FoxholeModLauncher
             }
             if (what == "details") { details = true; hover = "details"; }
             if (what == "hover") hover = "play";
-            if (what == "busy") { buttonsOn = false; statusText = "Starting Foxhole and joining the server..."; }
+            if (what == "busy") { buttonsOn = false; statusText = "Starting the live war through Steam..."; }
             sideText = "Up to date"; sideKind = 1;
             if (what == "options-low")
             {
@@ -412,7 +406,6 @@ namespace FoxholeModLauncher
             if (what == "installed-update") ShotInstalledUpdate();
             if (what == "installed-thumbs") ShotInstalledThumbs();      // (pictures on the rows - LauncherModUpdates.cs)
             if (what == "details") page = "activity";
-            if (what == "servers" || what == "servers-many") page = "servers";
             if (what.StartsWith("options")) page = what == "options-me" ? "tools" : "settings";
             if (what == "mods") page = "tools";
             if (what == "public-mods" || what == "installed" || what == "installed-update" || what == "installed-thumbs") page = "installed";

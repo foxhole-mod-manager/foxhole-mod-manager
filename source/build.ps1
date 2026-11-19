@@ -13,7 +13,7 @@ if (-not $Out) { $bin = Join-Path $here 'bin'; New-Item -ItemType Directory -For
 $res = @("/win32icon:$(Join-Path $here 'resources\logo.ico')")
 $rel = Join-Path $here 'public_release.json'
 if (Test-Path $rel) { $res += "/resource:$rel,public_release.json" }
-$manifest = Join-Path $here 'resources\launcher.manifest'
+$manifest = Join-Path $here 'resources\app.manifest'
 $src = Join-Path $here 'src'
 $files = @((Get-ChildItem (Join-Path $src 'Launcher*.cs')).FullName) + @((Join-Path $src 'PakIni.cs'))
 & $csc /nologo /target:winexe /optimize+ /define:PUBLIC /out:$Out "/win32manifest:$manifest" `

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity version="1.0.0.0" name="FoxholeModLauncher.app" type="win32"/>
-  <description>Foxhole Mod Launcher</description>
+  <assemblyIdentity version="1.1.1.0" name="FoxholeModManager.app" type="win32"/>
+  <description>Foxhole Mod Manager (unofficial)</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">

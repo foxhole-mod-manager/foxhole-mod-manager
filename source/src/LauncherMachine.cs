@@ -14,7 +14,9 @@ using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace FoxholeModLauncher
 {
@@ -25,24 +27,8 @@ namespace FoxholeModLauncher
         bool belowWarned;
 
         // ---- reading the PC
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-        struct DXGI_ADAPTER_DESC1
-        {
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string Description;
-            public uint VendorId, DeviceId, SubSysId, Revision;
-            public UIntPtr DedicatedVideoMemory, DedicatedSystemMemory, SharedSystemMemory;
-            public uint LuidLow; public int LuidHigh;
-            public uint Flags;
-        }
-        [DllImport("dxgi.dll")] static extern int CreateDXGIFactory1(ref Guid riid, out IntPtr factory);
-        [UnmanagedFunctionPointer(CallingConvention.StdCall)] delegate int EnumAdapters1Fn(IntPtr self, uint index, out IntPtr adapter);
-        [UnmanagedFunctionPointer(CallingConvention.StdCall)] delegate int GetDesc1Fn(IntPtr self, out DXGI_ADAPTER_DESC1 desc);
-        [UnmanagedFunctionPointer(CallingConvention.StdCall)] delegate uint ReleaseFn(IntPtr self);
-        static T VtFn<T>(IntPtr obj, int slot) where T : class
-        {
-            IntPtr vt = Marshal.ReadIntPtr(obj);
-            return Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(vt, slot * IntPtr.Size), typeof(T)) as T;
-        }
+        // a graphics adapter as its display driver registers it (name, PCI vendor, dedicated video memory in bytes)
+        class AdapterInfo { public string Description = ""; public uint VendorId; public ulong DedicatedVideoMemory; }
         [StructLayout(LayoutKind.Sequential)]
         class MEMORYSTATUSEX
         {
@@ -52,30 +38,87 @@ namespace FoxholeModLauncher
         [DllImport("kernel32.dll")] static extern bool GlobalMemoryStatusEx([In, Out] MEMORYSTATUSEX m);
         [DllImport("kernel32.dll")] static extern bool GetPhysicallyInstalledSystemMemory(out ulong kb);
 
-        // every hardware adapter (IDXGIFactory1::EnumAdapters1 = vtable slot 12, IDXGIAdapter1::GetDesc1 = slot 10, Release = 2)
-        static List<DXGI_ADAPTER_DESC1> Adapters()
+        // (2026-11-18, 1.1.1 review) every display adapter Windows started this session, read from the registry - no graphics API is
+        // loaded (it was DXGI through its COM vtable). HKLM\HARDWARE\DEVICEMAP\VIDEO (volatile: rebuilt at every boot) lists the started
+        // display devices as ...\Control\Video\{id}\000n; that id's "Video" key names the driver's key in the display class
+        // (Control\Class\{4d36e968-...}\00xx: DriverDesc, MatchingDeviceId "pci\ven_xxxx&...", HardwareInformation.qwMemorySize, else the
+        // older 32-bit HardwareInformation.MemorySize). Microsoft's Basic Display (vendor 1414, no class key) is left out like DXGI's
+        // software adapter. When the device map gives nothing, every numbered class key is read. (The driver's figure is the card's full
+        // memory - DXGI reported a little less: 10.0 GB instead of 9.8 GB on an RTX 3080.)
+        const string DISPLAY_CLASS_ID = "{4d36e968-e325-11ce-bfc1-08002be10318}";
+        const string DISPLAY_CLASS = @"SYSTEM\CurrentControlSet\Control\Class\" + DISPLAY_CLASS_ID;
+        static List<AdapterInfo> Adapters()
         {
-            var list = new List<DXGI_ADAPTER_DESC1>();
-            var iid = new Guid("770aae78-f26f-4dba-a829-253c83d1b387");
-            IntPtr f;
-            if (CreateDXGIFactory1(ref iid, out f) != 0 || f == IntPtr.Zero) return list;
+            var list = new List<AdapterInfo>();
+            var keys = new List<string>();                 // (class subkeys "00xx", in the device map's order, each once)
             try
             {
-                var enumAdapters = VtFn<EnumAdapters1Fn>(f, 12);
-                for (uint i = 0; i < 16; i++)
-                {
-                    IntPtr a;
-                    if (enumAdapters(f, i, out a) != 0 || a == IntPtr.Zero) break;     // (DXGI_ERROR_NOT_FOUND: no more)
-                    try
+                using (var map = Registry.LocalMachine.OpenSubKey(@"HARDWARE\DEVICEMAP\VIDEO"))
+                    if (map != null)
                     {
-                        DXGI_ADAPTER_DESC1 d;
-                        if (VtFn<GetDesc1Fn>(a, 10)(a, out d) == 0 && (d.Flags & 2) == 0 && d.VendorId != 0x1414) list.Add(d);   // (not the software one)
+                        var names = new List<string>(map.GetValueNames());
+                        names.Sort((a, b) => VideoIndex(a).CompareTo(VideoIndex(b)));
+                        foreach (var n in names)
+                        {
+                            if (VideoIndex(n) == int.MaxValue) continue;
+                            var m = Regex.Match(map.GetValue(n) as string ?? "", @"\Control\Video\(\{[0-9A-Fa-f-]+\})\\d{4}$", RegexOptions.IgnoreCase);
+                            if (!m.Success) continue;
+                            using (var v = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Video\" + m.Groups[1].Value + @"\Video"))
+                            {
+                                string drv = v == null ? "" : (v.GetValue("Driver") as string ?? "");
+                                if (!drv.StartsWith(DISPLAY_CLASS_ID + @"\", StringComparison.OrdinalIgnoreCase)) continue;
+                                string sub = drv.Substring(DISPLAY_CLASS_ID.Length + 1);
+                                if (Regex.IsMatch(sub, @"^\d{4}$") && !keys.Contains(sub)) keys.Add(sub);
+                            }
+                        }
                     }
-                    finally { VtFn<ReleaseFn>(a, 2)(a); }
-                }
             }
-            finally { VtFn<ReleaseFn>(f, 2)(f); }
+            catch { }
+            if (keys.Count == 0)
+                try
+                {
+                    using (var cls = Registry.LocalMachine.OpenSubKey(DISPLAY_CLASS))
+                        if (cls != null) foreach (var s in cls.GetSubKeyNames()) if (Regex.IsMatch(s, @"^\d{4}$")) keys.Add(s);
+                }
+                catch { }
+            foreach (var sub in keys)
+            {
+                try
+                {
+                    using (var k = Registry.LocalMachine.OpenSubKey(DISPLAY_CLASS + @"\" + sub))
+                    {
+                        if (k == null) continue;
+                        string desc = k.GetValue("DriverDesc") as string;
+                        if (string.IsNullOrEmpty(desc)) continue;
+                        var a = new AdapterInfo { Description = desc };
+                        var vm = Regex.Match(k.GetValue("MatchingDeviceId") as string ?? "", @"ven_([0-9a-f]{4})", RegexOptions.IgnoreCase);
+                        if (vm.Success) a.VendorId = Convert.ToUInt32(vm.Groups[1].Value, 16);
+                        if (a.VendorId == 0x1414) continue;       // (Microsoft's software / basic display adapter)
+                        a.DedicatedVideoMemory = RegSize(k.GetValue("HardwareInformation.qwMemorySize"));
+                        if (a.DedicatedVideoMemory == 0) a.DedicatedVideoMemory = RegSize(k.GetValue("HardwareInformation.MemorySize"));
+                        list.Add(a);
+                    }
+                }
+                catch { }
+            }
             return list;
+        }
+        // "\Device\Video<n>" -> n (anything else: last, skipped)
+        static int VideoIndex(string valueName)
+        {
+            const string P = @"\Device\Video";
+            int i;
+            return valueName.StartsWith(P, StringComparison.OrdinalIgnoreCase) && int.TryParse(valueName.Substring(P.Length), out i) ? i : int.MaxValue;
+        }
+        // a registry size value: REG_QWORD (long), REG_DWORD (int) or REG_BINARY (8 / 4 bytes, little-endian)
+        static ulong RegSize(object v)
+        {
+            if (v is long) return (ulong)(long)v;
+            if (v is int) return (uint)(int)v;
+            var b = v as byte[];
+            if (b != null && b.Length >= 8) return BitConverter.ToUInt64(b, 0);
+            if (b != null && b.Length >= 4) return BitConverter.ToUInt32(b, 0);
+            return 0;
         }
 
         static MachineFacts ReadMachine()
@@ -100,7 +143,7 @@ namespace FoxholeModLauncher
                 bool picked = false, pickedDedicated = false;
                 foreach (var d in Adapters())
                 {
-                    double ded = d.DedicatedVideoMemory.ToUInt64() / 1073741824.0;
+                    double ded = d.DedicatedVideoMemory / 1073741824.0;
                     bool igpu = MachineClass.IsIntegrated(d.Description, d.VendorId, ded);
                     m.Adapters.Add(d.Description.Trim() + " (" + (igpu ? "integrated" : "dedicated") + ", " + ded.ToString("0.0") + " GB own memory, vendor " +
                                    d.VendorId.ToString("x4") + ")");
