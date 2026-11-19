@@ -1,9 +1,9 @@
 {
-  "version": "1.1.0",
-  "notes": "The offline sandbox is removed for now. If you used it, press Restore the game once - it puts the original game files back.",
+  "version": "1.1.1",
+  "notes": "Smaller and simpler: .7z mods are no longer unpacked by the app (unpack them with 7-Zip first, then add the .pak - or zip the unpacked files and add the .zip). If you used the old offline sandbox, press Restore the game once.",
   "sandbox_off": {
     "all": true,
     "below_app": "1.1.0",
-    "message": "The offline sandbox is removed for now - update the app to 1.1.0 and press Restore the game."
+    "message": "The offline sandbox is removed for now - update the app to 1.1.0 or newer and press Restore the game."
   }
 }
